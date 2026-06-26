@@ -6,8 +6,8 @@ const paperSizes = {
   a4: { label: "A4", width: 1400, height: 1980 }
 };
 const fixedPaper = { size: "a4", background: "lined" };
-const paperPatternSpacing = 40;
-const fixedStrokeWidth = 3;
+const paperPatternSpacing = 48;
+const fixedStrokeWidth = 2.5;
 const strokeEraserScreenRadius = 9;
 const pdfPageSize = { width: 595.28, height: 841.89 };
 const pdfImageQuality = 0.92;
