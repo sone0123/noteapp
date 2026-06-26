@@ -431,7 +431,7 @@ button {
   box-shadow: var(--paper-shadow);
   cursor: crosshair;
   outline: 0;
-  touch-action: pan-x pan-y;
+  touch-action: none;
   -webkit-touch-callout: none;
   -webkit-user-select: none;
   user-select: none;

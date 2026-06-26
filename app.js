@@ -55,6 +55,7 @@ let currentView = "list";
 let canvasZoom = 1;
 let visiblePageSelectionFrame = null;
 let stylusModeActive = false;
+let touchScrollGesture = null;
 
 const minCanvasZoom = 0.5;
 const maxCanvasZoom = 2;
@@ -82,7 +83,6 @@ elements.newNoteButton.addEventListener("click", () => {
   currentView = "editor";
   persistSoon();
   render();
-  elements.titleInput.focus();
 });
 
 elements.backToListButton.addEventListener("click", () => {
@@ -90,7 +90,6 @@ elements.backToListButton.addEventListener("click", () => {
   currentStroke = null;
   persistNow();
   render();
-  elements.searchInput.focus();
 });
 
 elements.clearCanvasButton.addEventListener("click", () => {
@@ -829,7 +828,6 @@ function deleteNote(noteId) {
   clearHistory();
   persistSoon();
   render();
-  elements.searchInput.focus();
 }
 
 function selectPage(pageId) {
@@ -930,6 +928,16 @@ function startStroke(event) {
     activateStylusMode();
   }
 
+  if (event.pointerType === "touch") {
+    if (currentStroke || touchScrollGesture) {
+      preventIgnoredCanvasInput(event);
+      return;
+    }
+
+    beginTouchScroll(event, canvas);
+    return;
+  }
+
   if (currentStroke || !canUsePointerForDrawing(event)) {
     preventIgnoredCanvasInput(event);
     return;
@@ -971,6 +979,11 @@ function startStroke(event) {
 }
 
 function continueStroke(event) {
+  if (isTouchScrollPointer(event)) {
+    continueTouchScroll(event);
+    return;
+  }
+
   if (!isCurrentStrokePointer(event)) {
     preventIgnoredCanvasInput(event);
     return;
@@ -998,6 +1011,11 @@ function continueStroke(event) {
 }
 
 function finishStroke(event) {
+  if (isTouchScrollPointer(event)) {
+    finishTouchScroll(event);
+    return;
+  }
+
   if (!isCurrentStrokePointer(event)) {
     preventIgnoredCanvasInput(event);
     return;
@@ -1039,6 +1057,11 @@ function finishStroke(event) {
 }
 
 function cancelStroke(event) {
+  if (isTouchScrollPointer(event)) {
+    finishTouchScroll(event);
+    return;
+  }
+
   if (!isCurrentStrokePointer(event)) {
     preventIgnoredCanvasInput(event);
     return;
@@ -1067,6 +1090,46 @@ function canUsePointerForDrawing(event) {
   return event.pointerType !== "touch";
 }
 
+function beginTouchScroll(event, canvas) {
+  event.preventDefault();
+  clearEditorSelectionInStylusMode();
+  touchScrollGesture = {
+    pointerId: event.pointerId,
+    canvas,
+    startX: event.clientX,
+    startY: event.clientY,
+    scrollLeft: elements.canvasShell.scrollLeft,
+    scrollTop: elements.canvasShell.scrollTop
+  };
+  canvas.setPointerCapture(event.pointerId);
+}
+
+function continueTouchScroll(event) {
+  event.preventDefault();
+  const deltaX = event.clientX - touchScrollGesture.startX;
+  const deltaY = event.clientY - touchScrollGesture.startY;
+  elements.canvasShell.scrollLeft = touchScrollGesture.scrollLeft - deltaX;
+  elements.canvasShell.scrollTop = touchScrollGesture.scrollTop - deltaY;
+}
+
+function finishTouchScroll(event) {
+  event.preventDefault();
+  const gesture = touchScrollGesture;
+  if (gesture?.canvas.hasPointerCapture(event.pointerId)) {
+    gesture.canvas.releasePointerCapture(event.pointerId);
+  }
+
+  touchScrollGesture = null;
+}
+
+function isTouchScrollPointer(event) {
+  return Boolean(
+    touchScrollGesture
+    && event.currentTarget === touchScrollGesture.canvas
+    && event.pointerId === touchScrollGesture.pointerId
+  );
+}
+
 function isCurrentStrokePointer(event) {
   return Boolean(
     currentStroke
@@ -1077,9 +1140,7 @@ function isCurrentStrokePointer(event) {
 
 function preventIgnoredCanvasInput(event) {
   clearEditorSelectionInStylusMode();
-  if (event.pointerType !== "touch") {
-    event.preventDefault();
-  }
+  event.preventDefault();
 }
 
 function preventCanvasGestureMenu(event) {
