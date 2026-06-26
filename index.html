@@ -14,15 +14,6 @@
         <header class="list-header">
           <h1 id="listTitle">NoteApp</h1>
           <div class="list-actions">
-            <label class="select-control" title="新規ノートの紙サイズ">
-              <span class="visually-hidden">新規ノートの紙サイズ</span>
-              <select id="newPaperSizeSelect" aria-label="新規ノートの紙サイズ">
-                <option value="a4">A4</option>
-                <option value="a5">A5</option>
-                <option value="b5">B5</option>
-                <option value="letter">Letter</option>
-              </select>
-            </label>
             <button class="icon-button primary" id="newNoteButton" type="button" title="新規ノート" aria-label="新規ノート">
               <svg viewBox="0 0 24 24" aria-hidden="true">
                 <path d="M12 5v14M5 12h14"></path>
@@ -55,12 +46,7 @@
           <input id="titleInput" class="title-input" type="text" placeholder="無題" autocomplete="off">
 
           <div class="document-actions">
-            <div class="save-state" id="saveState" role="status" aria-live="polite">保存済み</div>
-            <button class="icon-button danger" id="deleteNoteButton" type="button" title="削除" aria-label="削除">
-              <svg viewBox="0 0 24 24" aria-hidden="true">
-                <path d="M4 7h16M10 11v6M14 11v6M6 7l1 14h10l1-14M9 7V4h6v3"></path>
-              </svg>
-            </button>
+            <div class="save-state" id="saveState" role="status" aria-live="polite">最終更新 --</div>
           </div>
         </header>
 
@@ -83,16 +69,19 @@
             <button class="swatch active" type="button" data-color="#202124" style="--swatch: #202124" title="黒" aria-label="黒" aria-pressed="true"></button>
             <button class="swatch" type="button" data-color="#1f6feb" style="--swatch: #1f6feb" title="青" aria-label="青" aria-pressed="false"></button>
             <button class="swatch" type="button" data-color="#d23f31" style="--swatch: #d23f31" title="赤" aria-label="赤" aria-pressed="false"></button>
-            <button class="swatch" type="button" data-color="#2f7d46" style="--swatch: #2f7d46" title="緑" aria-label="緑" aria-pressed="false"></button>
           </div>
 
-          <label class="width-control" title="線幅">
-            <span class="visually-hidden">線幅</span>
-            <svg viewBox="0 0 24 24" aria-hidden="true">
-              <path d="M4 20 20 4"></path>
-            </svg>
-            <input id="strokeWidthInput" type="range" min="2" max="20" value="5" aria-label="線幅">
-          </label>
+          <div class="width-options" role="group" aria-label="線幅">
+            <button class="width-option" type="button" data-width="3" title="細い線" aria-label="細い線" aria-pressed="false">
+              <span style="--dot-size: 6px"></span>
+            </button>
+            <button class="width-option active" type="button" data-width="6" title="標準の線" aria-label="標準の線" aria-pressed="true">
+              <span style="--dot-size: 10px"></span>
+            </button>
+            <button class="width-option" type="button" data-width="10" title="太い線" aria-label="太い線" aria-pressed="false">
+              <span style="--dot-size: 15px"></span>
+            </button>
+          </div>
 
           <label class="select-control" title="背景">
             <span class="visually-hidden">背景</span>
@@ -102,6 +91,32 @@
               <option value="grid">方眼</option>
             </select>
           </label>
+
+          <div class="page-controls" role="group" aria-label="ページ">
+            <button class="icon-button" id="previousPageButton" type="button" title="前のページ" aria-label="前のページ">
+              <svg viewBox="0 0 24 24" aria-hidden="true">
+                <path d="m15 18-6-6 6-6"></path>
+              </svg>
+            </button>
+            <div class="page-state" id="pageState" aria-live="polite">1 / 1</div>
+            <button class="icon-button" id="nextPageButton" type="button" title="次のページ" aria-label="次のページ">
+              <svg viewBox="0 0 24 24" aria-hidden="true">
+                <path d="m9 18 6-6-6-6"></path>
+              </svg>
+            </button>
+            <button class="icon-button" id="addPageButton" type="button" title="ページ追加" aria-label="ページ追加">
+              <svg viewBox="0 0 24 24" aria-hidden="true">
+                <path d="M12 5v14M5 12h14"></path>
+              </svg>
+            </button>
+            <button class="icon-button danger" id="deletePageButton" type="button" title="ページ削除" aria-label="ページ削除">
+              <svg viewBox="0 0 24 24" aria-hidden="true">
+                <path d="M3 6h18"></path>
+                <path d="M8 6V4h8v2"></path>
+                <path d="m6 6 1 15h10l1-15"></path>
+              </svg>
+            </button>
+          </div>
 
           <div class="zoom-controls" role="group" aria-label="表示倍率">
             <button class="icon-button" id="zoomOutButton" type="button" title="縮小" aria-label="縮小">

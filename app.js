@@ -3,35 +3,36 @@ const legacyStorageKey = "noteapp.web.notes.v1";
 const selectedKey = "noteapp.web.handwritten.selected.v1";
 
 const paperSizes = {
-  a4: { label: "A4", width: 1400, height: 1980 },
-  a5: { label: "A5", width: 990, height: 1400 },
-  b5: { label: "B5", width: 1200, height: 1697 },
-  letter: { label: "Letter", width: 1400, height: 1812 }
+  a4: { label: "A4", width: 1400, height: 1980 }
 };
 const paperBackgrounds = ["plain", "lined", "grid"];
 const defaultPaper = { size: "a4", background: "grid" };
 const paperPatternSpacing = 40;
+const defaultStrokeWidth = 6;
 
 const elements = {
   skipLink: document.querySelector(".skip-link"),
   listView: document.querySelector("#listView"),
   editorView: document.querySelector("#editorView"),
   newNoteButton: document.querySelector("#newNoteButton"),
-  newPaperSizeSelect: document.querySelector("#newPaperSizeSelect"),
   backToListButton: document.querySelector("#backToListButton"),
-  deleteNoteButton: document.querySelector("#deleteNoteButton"),
   clearCanvasButton: document.querySelector("#clearCanvasButton"),
   undoButton: document.querySelector("#undoButton"),
   redoButton: document.querySelector("#redoButton"),
   penButton: document.querySelector("#penButton"),
   eraserButton: document.querySelector("#eraserButton"),
+  previousPageButton: document.querySelector("#previousPageButton"),
+  nextPageButton: document.querySelector("#nextPageButton"),
+  addPageButton: document.querySelector("#addPageButton"),
+  deletePageButton: document.querySelector("#deletePageButton"),
+  pageState: document.querySelector("#pageState"),
   zoomOutButton: document.querySelector("#zoomOutButton"),
   zoomResetButton: document.querySelector("#zoomResetButton"),
   zoomInButton: document.querySelector("#zoomInButton"),
   zoomValue: document.querySelector("#zoomValue"),
-  strokeWidthInput: document.querySelector("#strokeWidthInput"),
   paperBackgroundSelect: document.querySelector("#paperBackgroundSelect"),
   swatches: [...document.querySelectorAll(".swatch")],
+  widthButtons: [...document.querySelectorAll(".width-option")],
   searchInput: document.querySelector("#searchInput"),
   noteList: document.querySelector("#noteList"),
   titleInput: document.querySelector("#titleInput"),
@@ -52,7 +53,7 @@ let saveTimer = null;
 let currentStroke = null;
 let activeTool = "pen";
 let activeColor = "#202124";
-let strokeWidth = Number(elements.strokeWidthInput.value);
+let strokeWidth = defaultStrokeWidth;
 let redoStack = [];
 let currentView = "list";
 let canvasZoom = 1;
@@ -71,7 +72,7 @@ canvasResizeObserver?.observe(elements.canvas);
 window.addEventListener("resize", updatePaperPattern);
 
 elements.newNoteButton.addEventListener("click", () => {
-  const note = createNote(elements.newPaperSizeSelect.value);
+  const note = createNote();
   notes = [note, ...notes];
   selectedId = note.id;
   redoStack = [];
@@ -89,36 +90,10 @@ elements.backToListButton.addEventListener("click", () => {
   elements.searchInput.focus();
 });
 
-elements.deleteNoteButton.addEventListener("click", () => {
-  const note = getSelectedNote();
-  if (!note) {
-    return;
-  }
-
-  const label = note.title.trim() || "無題";
-  const shouldDelete = window.confirm(`「${label}」を削除しますか？`);
-  if (!shouldDelete) {
-    return;
-  }
-
-  notes = notes.filter((item) => item.id !== note.id);
-
-  if (notes.length === 0) {
-    selectedId = null;
-    currentView = "list";
-  } else {
-    selectedId = notes[0].id;
-    currentView = "list";
-  }
-
-  redoStack = [];
-  persistSoon();
-  render();
-});
-
 elements.clearCanvasButton.addEventListener("click", () => {
   const note = getSelectedNote();
-  if (!note || note.strokes.length === 0) {
+  const page = getSelectedPage(note);
+  if (!note || !page || page.strokes.length === 0) {
     return;
   }
 
@@ -127,7 +102,7 @@ elements.clearCanvasButton.addEventListener("click", () => {
     return;
   }
 
-  note.strokes = [];
+  page.strokes = [];
   note.updatedAt = new Date().toISOString();
   redoStack = [];
   persistSoon();
@@ -136,11 +111,12 @@ elements.clearCanvasButton.addEventListener("click", () => {
 
 elements.undoButton.addEventListener("click", () => {
   const note = getSelectedNote();
-  if (!note || note.strokes.length === 0) {
+  const page = getSelectedPage(note);
+  if (!note || !page || page.strokes.length === 0) {
     return;
   }
 
-  const stroke = note.strokes.pop();
+  const stroke = page.strokes.pop();
   redoStack.push(stroke);
   note.updatedAt = new Date().toISOString();
   persistSoon();
@@ -149,12 +125,13 @@ elements.undoButton.addEventListener("click", () => {
 
 elements.redoButton.addEventListener("click", () => {
   const note = getSelectedNote();
+  const page = getSelectedPage(note);
   const stroke = redoStack.pop();
-  if (!note || !stroke) {
+  if (!note || !page || !stroke) {
     return;
   }
 
-  note.strokes.push(stroke);
+  page.strokes.push(stroke);
   note.updatedAt = new Date().toISOString();
   persistSoon();
   render();
@@ -170,13 +147,21 @@ elements.eraserButton.addEventListener("click", () => {
   updateToolButtons();
 });
 
-elements.strokeWidthInput.addEventListener("input", () => {
-  strokeWidth = Number(elements.strokeWidthInput.value);
-});
-
 elements.paperBackgroundSelect.addEventListener("change", () => {
   updatePaperBackground(elements.paperBackgroundSelect.value);
 });
+
+elements.previousPageButton.addEventListener("click", () => {
+  selectPageByOffset(-1);
+});
+
+elements.nextPageButton.addEventListener("click", () => {
+  selectPageByOffset(1);
+});
+
+elements.addPageButton.addEventListener("click", addPage);
+
+elements.deletePageButton.addEventListener("click", deleteCurrentPage);
 
 elements.zoomOutButton.addEventListener("click", () => {
   setCanvasZoom(canvasZoom - canvasZoomStep);
@@ -196,6 +181,13 @@ for (const swatch of elements.swatches) {
     activeTool = "pen";
     updateToolButtons();
     updateSwatches();
+  });
+}
+
+for (const button of elements.widthButtons) {
+  button.addEventListener("click", () => {
+    strokeWidth = Number(button.dataset.width) || defaultStrokeWidth;
+    updateWidthButtons();
   });
 }
 
@@ -219,20 +211,25 @@ elements.canvas.addEventListener("pointerup", finishStroke);
 elements.canvas.addEventListener("pointercancel", cancelStroke);
 window.addEventListener("beforeunload", persistNow);
 
-function createNote(size = defaultPaper.size) {
+function createNote() {
   const now = new Date().toISOString();
-  const paperSize = paperSizes[size] ? size : defaultPaper.size;
+  const firstPage = createPage();
 
   return {
     id: makeId(),
     title: "",
-    paper: {
-      ...defaultPaper,
-      size: paperSize
-    },
-    strokes: [],
+    paper: { ...defaultPaper },
+    pages: [firstPage],
+    selectedPageId: firstPage.id,
     createdAt: now,
     updatedAt: now
+  };
+}
+
+function createPage(strokes = []) {
+  return {
+    id: makeId(),
+    strokes
   };
 }
 
@@ -276,21 +273,46 @@ function normalizeNote(note) {
     return null;
   }
 
+  const pages = normalizePages(note);
+  const selectedPageId = pages.some((page) => page.id === note.selectedPageId)
+    ? note.selectedPageId
+    : pages[0].id;
+
   return {
     id: note.id,
     title: typeof note.title === "string" ? note.title : "",
     paper: normalizePaper(note.paper),
-    strokes: Array.isArray(note.strokes) ? note.strokes.filter(isValidStroke) : [],
+    pages,
+    selectedPageId,
     createdAt: typeof note.createdAt === "string" ? note.createdAt : new Date().toISOString(),
     updatedAt: typeof note.updatedAt === "string" ? note.updatedAt : new Date().toISOString()
   };
 }
 
+function normalizePages(note) {
+  const pageSources = Array.isArray(note.pages)
+    ? note.pages
+    : [{ id: makeId(), strokes: note.strokes }];
+  const pages = pageSources.map(normalizePage).filter(Boolean);
+
+  return pages.length > 0 ? pages : [createPage()];
+}
+
+function normalizePage(page) {
+  if (!page || typeof page !== "object") {
+    return null;
+  }
+
+  return {
+    id: typeof page.id === "string" ? page.id : makeId(),
+    strokes: Array.isArray(page.strokes) ? page.strokes.filter(isValidStroke) : []
+  };
+}
+
 function normalizePaper(paper) {
-  const size = paperSizes[paper?.size] ? paper.size : defaultPaper.size;
   const background = paperBackgrounds.includes(paper?.background) ? paper.background : defaultPaper.background;
 
-  return { size, background };
+  return { size: defaultPaper.size, background };
 }
 
 function isValidStroke(stroke) {
@@ -312,16 +334,32 @@ function getSelectedNote() {
   return notes.find((note) => note.id === selectedId) ?? null;
 }
 
+function getSelectedPage(note = getSelectedNote()) {
+  if (!note) {
+    return null;
+  }
+
+  return note.pages.find((page) => page.id === note.selectedPageId) ?? note.pages[0] ?? null;
+}
+
+function getSelectedPageIndex(note = getSelectedNote()) {
+  if (!note) {
+    return -1;
+  }
+
+  return note.pages.findIndex((page) => page.id === note.selectedPageId);
+}
+
 function sortNotes(items) {
   return [...items].sort((a, b) => new Date(b.updatedAt) - new Date(a.updatedAt));
 }
 
 function persistSoon() {
-  elements.saveState.textContent = "保存中";
+  updateSaveState();
   window.clearTimeout(saveTimer);
   saveTimer = window.setTimeout(() => {
     persistNow();
-    elements.saveState.textContent = "保存済み";
+    updateSaveState();
   }, 250);
 }
 
@@ -334,6 +372,10 @@ function persistNow() {
   }
 }
 
+function updateSaveState(note = getSelectedNote()) {
+  elements.saveState.textContent = note ? `最終更新 ${formatDate(note.updatedAt)}` : "最終更新 --";
+}
+
 function render() {
   renderView();
   renderEditor();
@@ -342,7 +384,10 @@ function render() {
   redrawCanvas();
   updateToolButtons();
   updateSwatches();
+  updateWidthButtons();
+  updatePageControls();
   updateActionButtons();
+  updateSaveState();
 }
 
 function renderView() {
@@ -361,11 +406,11 @@ function renderView() {
 function renderEditor() {
   const note = getSelectedNote();
   const hasNote = Boolean(note);
+  const page = getSelectedPage(note);
 
   elements.titleInput.disabled = !hasNote;
-  elements.deleteNoteButton.disabled = !hasNote;
   elements.paperBackgroundSelect.disabled = !hasNote;
-  elements.clearCanvasButton.disabled = !hasNote || note.strokes.length === 0;
+  elements.clearCanvasButton.disabled = !hasNote || !page || page.strokes.length === 0;
   elements.titleInput.value = note?.title ?? "";
 
   if (note) {
@@ -392,32 +437,58 @@ function renderList() {
   }
 
   for (const note of filtered) {
-    const button = document.createElement("button");
-    button.type = "button";
-    button.className = note.id === selectedId ? "note-item active" : "note-item";
-    button.setAttribute("role", "listitem");
-    button.setAttribute("aria-current", note.id === selectedId ? "true" : "false");
+    const item = document.createElement("div");
+    item.className = note.id === selectedId ? "note-item active" : "note-item";
+    item.setAttribute("role", "listitem");
 
     const title = document.createElement("div");
     title.className = "note-title";
     title.textContent = note.title.trim() || "無題";
 
+    const meta = document.createElement("div");
+    meta.className = "note-meta";
+
     const date = document.createElement("div");
     date.className = "note-date";
     date.textContent = formatDate(note.updatedAt);
 
-    button.setAttribute("aria-label", `${title.textContent}，${date.textContent}`);
-    button.append(title, date);
-    button.addEventListener("click", () => {
+    const pages = document.createElement("div");
+    pages.className = "note-pages";
+    pages.textContent = `${note.pages.length}ページ`;
+
+    const openButton = document.createElement("button");
+    openButton.type = "button";
+    openButton.className = "note-open";
+    openButton.setAttribute("aria-current", note.id === selectedId ? "true" : "false");
+    openButton.setAttribute("aria-label", `${title.textContent}，${date.textContent}`);
+    meta.append(date, pages);
+    openButton.append(title, meta);
+    openButton.addEventListener("click", () => {
       selectedId = note.id;
       currentView = "editor";
+      currentStroke = null;
       redoStack = [];
       persistNow();
       render();
       elements.canvas.focus();
     });
 
-    elements.noteList.append(button);
+    const deleteButton = document.createElement("button");
+    deleteButton.type = "button";
+    deleteButton.className = "icon-button danger note-delete";
+    deleteButton.title = "ノート削除";
+    deleteButton.setAttribute("aria-label", `${title.textContent}を削除`);
+    deleteButton.innerHTML = `
+      <svg viewBox="0 0 24 24" aria-hidden="true">
+        <path d="M4 7h16M10 11v6M14 11v6M6 7l1 14h10l1-14M9 7V4h6v3"></path>
+      </svg>
+    `;
+    deleteButton.addEventListener("click", () => {
+      deleteNote(note.id);
+    });
+
+    item.append(openButton, deleteButton);
+    elements.noteList.append(item);
   }
 }
 
@@ -439,11 +510,33 @@ function updateSwatches() {
   }
 }
 
+function updateWidthButtons() {
+  for (const button of elements.widthButtons) {
+    const active = Number(button.dataset.width) === strokeWidth;
+    button.classList.toggle("active", active);
+    button.setAttribute("aria-pressed", String(active));
+  }
+}
+
+function updatePageControls() {
+  const note = getSelectedNote();
+  const pageIndex = getSelectedPageIndex(note);
+  const pageCount = note?.pages.length ?? 0;
+  const pageNumber = pageIndex >= 0 ? pageIndex + 1 : 0;
+
+  elements.pageState.textContent = pageCount > 0 ? `${pageNumber} / ${pageCount}` : "0 / 0";
+  elements.previousPageButton.disabled = !note || pageIndex <= 0;
+  elements.nextPageButton.disabled = !note || pageIndex < 0 || pageIndex >= pageCount - 1;
+  elements.addPageButton.disabled = !note;
+  elements.deletePageButton.disabled = !note || pageCount <= 1;
+}
+
 function updateActionButtons() {
   const note = getSelectedNote();
-  elements.undoButton.disabled = !note || note.strokes.length === 0;
+  const page = getSelectedPage(note);
+  elements.undoButton.disabled = !note || !page || page.strokes.length === 0;
   elements.redoButton.disabled = redoStack.length === 0;
-  elements.clearCanvasButton.disabled = !note || note.strokes.length === 0;
+  elements.clearCanvasButton.disabled = !note || !page || page.strokes.length === 0;
 }
 
 function setCanvasZoom(value) {
@@ -486,6 +579,92 @@ function updatePaperBackground(background) {
   render();
 }
 
+function deleteNote(noteId) {
+  const note = notes.find((item) => item.id === noteId);
+  if (!note) {
+    return;
+  }
+
+  const label = note.title.trim() || "無題";
+  const shouldDelete = window.confirm(`「${label}」を削除しますか？`);
+  if (!shouldDelete) {
+    return;
+  }
+
+  notes = notes.filter((item) => item.id !== noteId);
+  if (selectedId === noteId) {
+    selectedId = notes[0]?.id ?? null;
+  }
+
+  currentView = "list";
+  currentStroke = null;
+  redoStack = [];
+  persistSoon();
+  render();
+  elements.searchInput.focus();
+}
+
+function selectPageByOffset(offset) {
+  const note = getSelectedNote();
+  const pageIndex = getSelectedPageIndex(note);
+  if (!note || pageIndex < 0) {
+    return;
+  }
+
+  const nextIndex = clamp(pageIndex + offset, 0, note.pages.length - 1);
+  const nextPage = note.pages[nextIndex];
+  if (!nextPage || nextPage.id === note.selectedPageId) {
+    return;
+  }
+
+  note.selectedPageId = nextPage.id;
+  currentStroke = null;
+  redoStack = [];
+  persistNow();
+  render();
+  elements.canvas.focus();
+}
+
+function addPage() {
+  const note = getSelectedNote();
+  if (!note) {
+    return;
+  }
+
+  const page = createPage();
+  note.pages.push(page);
+  note.selectedPageId = page.id;
+  note.updatedAt = new Date().toISOString();
+  currentStroke = null;
+  redoStack = [];
+  persistSoon();
+  render();
+  elements.canvas.focus();
+}
+
+function deleteCurrentPage() {
+  const note = getSelectedNote();
+  const pageIndex = getSelectedPageIndex(note);
+  if (!note || pageIndex < 0 || note.pages.length <= 1) {
+    return;
+  }
+
+  const shouldDelete = window.confirm("このページを削除しますか？");
+  if (!shouldDelete) {
+    return;
+  }
+
+  note.pages.splice(pageIndex, 1);
+  const nextIndex = Math.min(pageIndex, note.pages.length - 1);
+  note.selectedPageId = note.pages[nextIndex].id;
+  note.updatedAt = new Date().toISOString();
+  currentStroke = null;
+  redoStack = [];
+  persistSoon();
+  render();
+  elements.canvas.focus();
+}
+
 function applyPaperToCanvas(paper) {
   const normalizedPaper = normalizePaper(paper);
   const size = getPaperSize(normalizedPaper);
@@ -508,7 +687,8 @@ function getPaperSize(paper) {
 
 function startStroke(event) {
   const note = getSelectedNote();
-  if (!note || event.button !== 0) {
+  const page = getSelectedPage(note);
+  if (!note || !page || event.button !== 0) {
     return;
   }
 
@@ -550,8 +730,9 @@ function finishStroke(event) {
   event.preventDefault();
 
   const note = getSelectedNote();
-  if (note) {
-    note.strokes.push(currentStroke);
+  const page = getSelectedPage(note);
+  if (note && page) {
+    page.strokes.push(currentStroke);
     note.updatedAt = new Date().toISOString();
     notes = sortNotes(notes);
     redoStack = [];
@@ -594,8 +775,9 @@ function redrawCanvas() {
   strokeLayerContext.clearRect(0, 0, strokeLayer.width, strokeLayer.height);
 
   const note = getSelectedNote();
-  if (note) {
-    for (const stroke of note.strokes) {
+  const page = getSelectedPage(note);
+  if (page) {
+    for (const stroke of page.strokes) {
       drawStroke(stroke, strokeLayerContext);
     }
   }
