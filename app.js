@@ -9,6 +9,8 @@ const fixedPaper = { size: "a4", background: "lined" };
 const paperPatternSpacing = 40;
 const fixedStrokeWidth = 3;
 const strokeEraserScreenRadius = 9;
+const pdfPageSize = { width: 595.28, height: 841.89 };
+const pdfImageQuality = 0.92;
 
 const elements = {
   skipLink: document.querySelector(".skip-link"),
@@ -19,6 +21,7 @@ const elements = {
   clearCanvasButton: document.querySelector("#clearCanvasButton"),
   undoButton: document.querySelector("#undoButton"),
   redoButton: document.querySelector("#redoButton"),
+  exportPdfButton: document.querySelector("#exportPdfButton"),
   penButton: document.querySelector("#penButton"),
   eraserButton: document.querySelector("#eraserButton"),
   strokeEraserButton: document.querySelector("#strokeEraserButton"),
@@ -116,6 +119,8 @@ elements.clearCanvasButton.addEventListener("click", () => {
 elements.undoButton.addEventListener("click", undoLastAction);
 
 elements.redoButton.addEventListener("click", redoLastAction);
+
+elements.exportPdfButton.addEventListener("click", exportSelectedNoteAsPdf);
 
 elements.penButton.addEventListener("click", () => {
   activeTool = "pen";
@@ -593,6 +598,7 @@ function updateActionButtons() {
   const hasFallbackUndo = Boolean(page && page.strokes.length > 0);
   elements.undoButton.disabled = !note || (!hasFallbackUndo && undoStack.length === 0);
   elements.redoButton.disabled = redoStack.length === 0;
+  elements.exportPdfButton.disabled = !note;
   elements.clearCanvasButton.disabled = !note || !page || page.strokes.length === 0;
 }
 
@@ -772,6 +778,224 @@ function strokesMatch(left, right) {
     && left.color === right.color
     && left.width === right.width
     && JSON.stringify(left.points) === JSON.stringify(right.points);
+}
+
+async function exportSelectedNoteAsPdf() {
+  const note = getSelectedNote();
+  if (!note) {
+    return;
+  }
+
+  elements.exportPdfButton.disabled = true;
+
+  try {
+    const pdfBlob = await createNotePdfBlob(note);
+    downloadBlob(pdfBlob, getPdfFileName(note));
+  } catch (error) {
+    console.error(error);
+    window.alert("PDFの書き出しに失敗しました。");
+  } finally {
+    updateActionButtons();
+  }
+}
+
+async function createNotePdfBlob(note) {
+  const exportPages = getPdfExportPages(note);
+  const images = [];
+
+  for (const page of exportPages) {
+    const canvas = renderPageForPdf(page);
+    const data = await canvasToJpegBytes(canvas, pdfImageQuality);
+    images.push({
+      width: canvas.width,
+      height: canvas.height,
+      data
+    });
+  }
+
+  return buildPdfBlob(images);
+}
+
+function getPdfExportPages(note) {
+  let lastDrawnIndex = -1;
+
+  note.pages.forEach((page, index) => {
+    if (hasPageDrawing(page)) {
+      lastDrawnIndex = index;
+    }
+  });
+
+  if (lastDrawnIndex === -1) {
+    return [note.pages[0] ?? createPage()];
+  }
+
+  return note.pages.slice(0, lastDrawnIndex + 1);
+}
+
+function renderPageForPdf(page) {
+  const size = getPaperSize();
+  const paperCanvas = document.createElement("canvas");
+  const inkCanvas = document.createElement("canvas");
+  paperCanvas.width = size.width;
+  paperCanvas.height = size.height;
+  inkCanvas.width = size.width;
+  inkCanvas.height = size.height;
+
+  const paperContext = paperCanvas.getContext("2d");
+  const inkContext = inkCanvas.getContext("2d");
+  drawPaperBackground(paperContext, size);
+
+  for (const stroke of page.strokes) {
+    drawStroke(stroke, inkContext);
+  }
+
+  paperContext.drawImage(inkCanvas, 0, 0);
+
+  return paperCanvas;
+}
+
+function drawPaperBackground(targetContext, size) {
+  targetContext.save();
+  targetContext.fillStyle = "#fffefa";
+  targetContext.fillRect(0, 0, size.width, size.height);
+  targetContext.strokeStyle = "rgba(47, 111, 115, 0.2)";
+  targetContext.lineWidth = 1;
+  targetContext.beginPath();
+
+  for (let y = paperPatternSpacing; y < size.height; y += paperPatternSpacing) {
+    const lineY = Math.round(y) + 0.5;
+    targetContext.moveTo(0, lineY);
+    targetContext.lineTo(size.width, lineY);
+  }
+
+  targetContext.stroke();
+  targetContext.restore();
+}
+
+function canvasToJpegBytes(canvas, quality) {
+  return new Promise((resolve, reject) => {
+    if (canvas.toBlob) {
+      canvas.toBlob(async (blob) => {
+        if (!blob) {
+          reject(new Error("Canvasから画像を生成できませんでした。"));
+          return;
+        }
+
+        try {
+          resolve(new Uint8Array(await blob.arrayBuffer()));
+        } catch (error) {
+          reject(error);
+        }
+      }, "image/jpeg", quality);
+      return;
+    }
+
+    resolve(dataUrlToBytes(canvas.toDataURL("image/jpeg", quality)));
+  });
+}
+
+function dataUrlToBytes(dataUrl) {
+  const base64 = dataUrl.split(",")[1] ?? "";
+  const binary = window.atob(base64);
+  const bytes = new Uint8Array(binary.length);
+
+  for (let index = 0; index < binary.length; index += 1) {
+    bytes[index] = binary.charCodeAt(index);
+  }
+
+  return bytes;
+}
+
+function buildPdfBlob(images) {
+  const encoder = new TextEncoder();
+  const chunks = [];
+  const offsets = [0];
+  let byteLength = 0;
+  const pageIds = images.map((_, index) => 3 + index * 3);
+  const objectCount = 2 + images.length * 3;
+
+  const appendText = (text) => {
+    appendBytes(encoder.encode(text));
+  };
+  const appendBytes = (bytes) => {
+    chunks.push(bytes);
+    byteLength += bytes.byteLength;
+  };
+  const beginObject = (objectId) => {
+    offsets[objectId] = byteLength;
+    appendText(`${objectId} 0 obj\n`);
+  };
+  const endObject = () => {
+    appendText("endobj\n");
+  };
+
+  appendText("%PDF-1.4\n");
+
+  beginObject(1);
+  appendText("<< /Type /Catalog /Pages 2 0 R >>\n");
+  endObject();
+
+  beginObject(2);
+  appendText(`<< /Type /Pages /Kids [${pageIds.map((id) => `${id} 0 R`).join(" ")}] /Count ${images.length} >>\n`);
+  endObject();
+
+  images.forEach((image, index) => {
+    const pageId = pageIds[index];
+    const contentId = pageId + 1;
+    const imageId = pageId + 2;
+    const imageName = `Im${index}`;
+    const content = `q\n${pdfPageSize.width} 0 0 ${pdfPageSize.height} 0 0 cm\n/${imageName} Do\nQ\n`;
+
+    beginObject(pageId);
+    appendText(`<< /Type /Page /Parent 2 0 R /MediaBox [0 0 ${pdfPageSize.width} ${pdfPageSize.height}] /Resources << /XObject << /${imageName} ${imageId} 0 R >> >> /Contents ${contentId} 0 R >>\n`);
+    endObject();
+
+    beginObject(contentId);
+    appendText(`<< /Length ${encoder.encode(content).byteLength} >>\nstream\n${content}endstream\n`);
+    endObject();
+
+    beginObject(imageId);
+    appendText(`<< /Type /XObject /Subtype /Image /Width ${image.width} /Height ${image.height} /ColorSpace /DeviceRGB /BitsPerComponent 8 /Filter /DCTDecode /Length ${image.data.byteLength} >>\nstream\n`);
+    appendBytes(image.data);
+    appendText("\nendstream\n");
+    endObject();
+  });
+
+  const xrefOffset = byteLength;
+  appendText(`xref\n0 ${objectCount + 1}\n`);
+  appendText("0000000000 65535 f \n");
+
+  for (let objectId = 1; objectId <= objectCount; objectId += 1) {
+    appendText(`${String(offsets[objectId]).padStart(10, "0")} 00000 n \n`);
+  }
+
+  appendText(`trailer\n<< /Size ${objectCount + 1} /Root 1 0 R >>\nstartxref\n${xrefOffset}\n%%EOF\n`);
+
+  return new Blob(chunks, { type: "application/pdf" });
+}
+
+function downloadBlob(blob, fileName) {
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = fileName;
+  document.body.append(link);
+  link.click();
+  link.remove();
+  window.setTimeout(() => {
+    URL.revokeObjectURL(url);
+  }, 1000);
+}
+
+function getPdfFileName(note) {
+  const title = note.title.trim() || "NoteApp";
+  const safeTitle = title
+    .replace(/[\\/:*?"<>|]+/g, "_")
+    .replace(/\s+/g, " ")
+    .trim()
+    .slice(0, 80);
+
+  return `${safeTitle || "NoteApp"}.pdf`;
 }
 
 function setCanvasZoom(value) {

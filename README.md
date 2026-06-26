@@ -23,6 +23,7 @@ HTML / CSS / JavaScriptだけで動く最小版です。
 - undo / redo
 - ページクリア
 - ノート一覧からのノート削除
+- PDFエクスポート
 - タイトル検索
 - 最終更新時刻表示
 - `localStorage` への自動保存
@@ -30,7 +31,7 @@ HTML / CSS / JavaScriptだけで動く最小版です。
 - ノート一覧ページと手書き編集ページの分離
 - 編集中はノート一覧を隠す集中モード
 
-まだPWA化，Service Worker，IndexedDB，エクスポート/インポートは未実装です。
+まだPWA化，Service Worker，IndexedDB，インポートは未実装です。
 
 ## 動かし方
 
