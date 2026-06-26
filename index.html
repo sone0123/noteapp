@@ -1,0 +1,103 @@
+<!doctype html>
+<html lang="ja">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>NoteApp</title>
+    <link rel="stylesheet" href="styles.css">
+  </head>
+  <body>
+    <div class="app-shell">
+      <aside class="sidebar" aria-label="ノート一覧">
+        <header class="sidebar-header">
+          <h1>NoteApp</h1>
+          <button class="icon-button primary" id="newNoteButton" type="button" title="新規ノート" aria-label="新規ノート">
+            <svg viewBox="0 0 24 24" aria-hidden="true">
+              <path d="M12 5v14M5 12h14"></path>
+            </svg>
+          </button>
+        </header>
+
+        <label class="search-field">
+          <svg viewBox="0 0 24 24" aria-hidden="true">
+            <path d="m21 21-4.3-4.3M10.8 18a7.2 7.2 0 1 1 0-14.4 7.2 7.2 0 0 1 0 14.4Z"></path>
+          </svg>
+          <input id="searchInput" type="search" placeholder="検索" autocomplete="off">
+        </label>
+
+        <div class="note-list" id="noteList" role="list"></div>
+      </aside>
+
+      <main class="editor-pane">
+        <header class="editor-toolbar">
+          <div class="drawing-tools" aria-label="描画ツール">
+            <button class="icon-button tool-button active" id="penButton" type="button" title="ペン" aria-label="ペン">
+              <svg viewBox="0 0 24 24" aria-hidden="true">
+                <path d="m18 2 4 4-12 12-5 1 1-5L18 2Z"></path>
+                <path d="m14 6 4 4"></path>
+              </svg>
+            </button>
+            <button class="icon-button tool-button" id="eraserButton" type="button" title="消しゴム" aria-label="消しゴム">
+              <svg viewBox="0 0 24 24" aria-hidden="true">
+                <path d="m7 21-5-5L14 4a3 3 0 0 1 4 0l2 2a3 3 0 0 1 0 4L9 21H7Z"></path>
+                <path d="m12 8 6 6"></path>
+                <path d="M3 21h18"></path>
+              </svg>
+            </button>
+
+            <div class="color-swatches" aria-label="色">
+              <button class="swatch active" type="button" data-color="#202124" style="--swatch: #202124" title="黒" aria-label="黒"></button>
+              <button class="swatch" type="button" data-color="#1f6feb" style="--swatch: #1f6feb" title="青" aria-label="青"></button>
+              <button class="swatch" type="button" data-color="#d23f31" style="--swatch: #d23f31" title="赤" aria-label="赤"></button>
+              <button class="swatch" type="button" data-color="#2f7d46" style="--swatch: #2f7d46" title="緑" aria-label="緑"></button>
+            </div>
+
+            <label class="width-control" title="線幅">
+              <svg viewBox="0 0 24 24" aria-hidden="true">
+                <path d="M4 20 20 4"></path>
+              </svg>
+              <input id="strokeWidthInput" type="range" min="2" max="20" value="5" aria-label="線幅">
+            </label>
+
+            <button class="icon-button" id="undoButton" type="button" title="元に戻す" aria-label="元に戻す">
+              <svg viewBox="0 0 24 24" aria-hidden="true">
+                <path d="M9 14 4 9l5-5"></path>
+                <path d="M4 9h11a5 5 0 0 1 0 10h-1"></path>
+              </svg>
+            </button>
+            <button class="icon-button" id="redoButton" type="button" title="やり直す" aria-label="やり直す">
+              <svg viewBox="0 0 24 24" aria-hidden="true">
+                <path d="m15 14 5-5-5-5"></path>
+                <path d="M20 9H9a5 5 0 0 0 0 10h1"></path>
+              </svg>
+            </button>
+            <button class="icon-button" id="clearCanvasButton" type="button" title="ページを消去" aria-label="ページを消去">
+              <svg viewBox="0 0 24 24" aria-hidden="true">
+                <path d="M3 6h18"></path>
+                <path d="M8 6V4h8v2"></path>
+                <path d="m6 6 1 15h10l1-15"></path>
+              </svg>
+            </button>
+          </div>
+
+          <div class="toolbar-spacer"></div>
+          <div class="save-state" id="saveState" aria-live="polite">保存済み</div>
+          <button class="icon-button danger" id="deleteNoteButton" type="button" title="削除" aria-label="削除">
+            <svg viewBox="0 0 24 24" aria-hidden="true">
+              <path d="M4 7h16M10 11v6M14 11v6M6 7l1 14h10l1-14M9 7V4h6v3"></path>
+            </svg>
+          </button>
+        </header>
+
+        <section class="editor-surface" aria-label="ノート編集">
+          <input id="titleInput" class="title-input" type="text" placeholder="無題" autocomplete="off">
+          <div class="canvas-shell">
+            <canvas id="drawingCanvas" class="drawing-canvas" width="1400" height="1900" tabindex="0" aria-label="手書きキャンバス"></canvas>
+          </div>
+        </section>
+      </main>
+    </div>
+
+    <script src="app.js"></script>
+  </body>
+</html>
