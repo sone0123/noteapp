@@ -2,18 +2,35 @@ const storageKey = "noteapp.web.handwritten.v1";
 const legacyStorageKey = "noteapp.web.notes.v1";
 const selectedKey = "noteapp.web.handwritten.selected.v1";
 
-const canvasWidth = 1400;
-const canvasHeight = 1900;
+const paperSizes = {
+  a4: { label: "A4", width: 1400, height: 1980 },
+  a5: { label: "A5", width: 990, height: 1400 },
+  b5: { label: "B5", width: 1200, height: 1697 },
+  letter: { label: "Letter", width: 1400, height: 1812 }
+};
+const paperBackgrounds = ["plain", "lined", "grid"];
+const defaultPaper = { size: "a4", background: "grid" };
+const paperPatternSpacing = 40;
 
 const elements = {
+  skipLink: document.querySelector(".skip-link"),
+  listView: document.querySelector("#listView"),
+  editorView: document.querySelector("#editorView"),
   newNoteButton: document.querySelector("#newNoteButton"),
+  newPaperSizeSelect: document.querySelector("#newPaperSizeSelect"),
+  backToListButton: document.querySelector("#backToListButton"),
   deleteNoteButton: document.querySelector("#deleteNoteButton"),
   clearCanvasButton: document.querySelector("#clearCanvasButton"),
   undoButton: document.querySelector("#undoButton"),
   redoButton: document.querySelector("#redoButton"),
   penButton: document.querySelector("#penButton"),
   eraserButton: document.querySelector("#eraserButton"),
+  zoomOutButton: document.querySelector("#zoomOutButton"),
+  zoomResetButton: document.querySelector("#zoomResetButton"),
+  zoomInButton: document.querySelector("#zoomInButton"),
+  zoomValue: document.querySelector("#zoomValue"),
   strokeWidthInput: document.querySelector("#strokeWidthInput"),
+  paperBackgroundSelect: document.querySelector("#paperBackgroundSelect"),
   swatches: [...document.querySelectorAll(".swatch")],
   searchInput: document.querySelector("#searchInput"),
   noteList: document.querySelector("#noteList"),
@@ -23,6 +40,11 @@ const elements = {
 };
 
 const context = elements.canvas.getContext("2d");
+const strokeLayer = document.createElement("canvas");
+const strokeLayerContext = strokeLayer.getContext("2d");
+const canvasResizeObserver = typeof ResizeObserver === "function"
+  ? new ResizeObserver(updatePaperPattern)
+  : null;
 
 let notes = loadNotes();
 let selectedId = localStorage.getItem(selectedKey);
@@ -32,13 +54,12 @@ let activeTool = "pen";
 let activeColor = "#202124";
 let strokeWidth = Number(elements.strokeWidthInput.value);
 let redoStack = [];
+let currentView = "list";
+let canvasZoom = 1;
 
-if (notes.length === 0) {
-  const firstNote = createNote();
-  notes = [firstNote];
-  selectedId = firstNote.id;
-  persistNow();
-}
+const minCanvasZoom = 0.5;
+const maxCanvasZoom = 2;
+const canvasZoomStep = 0.25;
 
 if (!notes.some((note) => note.id === selectedId)) {
   selectedId = notes[0]?.id ?? null;
@@ -46,14 +67,26 @@ if (!notes.some((note) => note.id === selectedId)) {
 
 render();
 
+canvasResizeObserver?.observe(elements.canvas);
+window.addEventListener("resize", updatePaperPattern);
+
 elements.newNoteButton.addEventListener("click", () => {
-  const note = createNote();
+  const note = createNote(elements.newPaperSizeSelect.value);
   notes = [note, ...notes];
   selectedId = note.id;
   redoStack = [];
+  currentView = "editor";
   persistSoon();
   render();
   elements.titleInput.focus();
+});
+
+elements.backToListButton.addEventListener("click", () => {
+  currentView = "list";
+  currentStroke = null;
+  persistNow();
+  render();
+  elements.searchInput.focus();
 });
 
 elements.deleteNoteButton.addEventListener("click", () => {
@@ -71,11 +104,11 @@ elements.deleteNoteButton.addEventListener("click", () => {
   notes = notes.filter((item) => item.id !== note.id);
 
   if (notes.length === 0) {
-    const nextNote = createNote();
-    notes = [nextNote];
-    selectedId = nextNote.id;
+    selectedId = null;
+    currentView = "list";
   } else {
     selectedId = notes[0].id;
+    currentView = "list";
   }
 
   redoStack = [];
@@ -141,6 +174,22 @@ elements.strokeWidthInput.addEventListener("input", () => {
   strokeWidth = Number(elements.strokeWidthInput.value);
 });
 
+elements.paperBackgroundSelect.addEventListener("change", () => {
+  updatePaperBackground(elements.paperBackgroundSelect.value);
+});
+
+elements.zoomOutButton.addEventListener("click", () => {
+  setCanvasZoom(canvasZoom - canvasZoomStep);
+});
+
+elements.zoomResetButton.addEventListener("click", () => {
+  setCanvasZoom(1);
+});
+
+elements.zoomInButton.addEventListener("click", () => {
+  setCanvasZoom(canvasZoom + canvasZoomStep);
+});
+
 for (const swatch of elements.swatches) {
   swatch.addEventListener("click", () => {
     activeColor = swatch.dataset.color;
@@ -170,12 +219,17 @@ elements.canvas.addEventListener("pointerup", finishStroke);
 elements.canvas.addEventListener("pointercancel", cancelStroke);
 window.addEventListener("beforeunload", persistNow);
 
-function createNote() {
+function createNote(size = defaultPaper.size) {
   const now = new Date().toISOString();
+  const paperSize = paperSizes[size] ? size : defaultPaper.size;
 
   return {
     id: makeId(),
     title: "",
+    paper: {
+      ...defaultPaper,
+      size: paperSize
+    },
     strokes: [],
     createdAt: now,
     updatedAt: now
@@ -225,10 +279,18 @@ function normalizeNote(note) {
   return {
     id: note.id,
     title: typeof note.title === "string" ? note.title : "",
+    paper: normalizePaper(note.paper),
     strokes: Array.isArray(note.strokes) ? note.strokes.filter(isValidStroke) : [],
     createdAt: typeof note.createdAt === "string" ? note.createdAt : new Date().toISOString(),
     updatedAt: typeof note.updatedAt === "string" ? note.updatedAt : new Date().toISOString()
   };
+}
+
+function normalizePaper(paper) {
+  const size = paperSizes[paper?.size] ? paper.size : defaultPaper.size;
+  const background = paperBackgrounds.includes(paper?.background) ? paper.background : defaultPaper.background;
+
+  return { size, background };
 }
 
 function isValidStroke(stroke) {
@@ -267,16 +329,33 @@ function persistNow() {
   localStorage.setItem(storageKey, JSON.stringify(notes));
   if (selectedId) {
     localStorage.setItem(selectedKey, selectedId);
+  } else {
+    localStorage.removeItem(selectedKey);
   }
 }
 
 function render() {
+  renderView();
   renderEditor();
   renderList();
+  updateZoomControls();
   redrawCanvas();
   updateToolButtons();
   updateSwatches();
   updateActionButtons();
+}
+
+function renderView() {
+  const showEditor = currentView === "editor" && Boolean(getSelectedNote());
+
+  elements.listView.hidden = showEditor;
+  elements.editorView.hidden = !showEditor;
+  elements.skipLink.href = showEditor ? "#drawingCanvas" : "#noteList";
+  elements.skipLink.textContent = showEditor ? "キャンバスへ移動" : "ノート一覧へ移動";
+
+  if (!showEditor) {
+    currentView = "list";
+  }
 }
 
 function renderEditor() {
@@ -285,8 +364,14 @@ function renderEditor() {
 
   elements.titleInput.disabled = !hasNote;
   elements.deleteNoteButton.disabled = !hasNote;
+  elements.paperBackgroundSelect.disabled = !hasNote;
   elements.clearCanvasButton.disabled = !hasNote || note.strokes.length === 0;
   elements.titleInput.value = note?.title ?? "";
+
+  if (note) {
+    applyPaperToCanvas(note.paper);
+    elements.paperBackgroundSelect.value = note.paper.background;
+  }
 }
 
 function renderList() {
@@ -301,7 +386,7 @@ function renderList() {
   if (filtered.length === 0) {
     const empty = document.createElement("div");
     empty.className = "empty-list";
-    empty.textContent = "該当するノートはありません";
+    empty.textContent = notes.length === 0 ? "ノートがありません" : "該当するノートはありません";
     elements.noteList.append(empty);
     return;
   }
@@ -311,22 +396,21 @@ function renderList() {
     button.type = "button";
     button.className = note.id === selectedId ? "note-item active" : "note-item";
     button.setAttribute("role", "listitem");
+    button.setAttribute("aria-current", note.id === selectedId ? "true" : "false");
 
     const title = document.createElement("div");
     title.className = "note-title";
     title.textContent = note.title.trim() || "無題";
 
-    const preview = document.createElement("div");
-    preview.className = "note-preview";
-    preview.textContent = `${note.strokes.length}本`;
-
     const date = document.createElement("div");
     date.className = "note-date";
     date.textContent = formatDate(note.updatedAt);
 
-    button.append(title, preview, date);
+    button.setAttribute("aria-label", `${title.textContent}，${date.textContent}`);
+    button.append(title, date);
     button.addEventListener("click", () => {
       selectedId = note.id;
+      currentView = "editor";
       redoStack = [];
       persistNow();
       render();
@@ -338,13 +422,20 @@ function renderList() {
 }
 
 function updateToolButtons() {
-  elements.penButton.classList.toggle("active", activeTool === "pen");
-  elements.eraserButton.classList.toggle("active", activeTool === "eraser");
+  const penActive = activeTool === "pen";
+  const eraserActive = activeTool === "eraser";
+
+  elements.penButton.classList.toggle("active", penActive);
+  elements.eraserButton.classList.toggle("active", eraserActive);
+  elements.penButton.setAttribute("aria-pressed", String(penActive));
+  elements.eraserButton.setAttribute("aria-pressed", String(eraserActive));
 }
 
 function updateSwatches() {
   for (const swatch of elements.swatches) {
-    swatch.classList.toggle("active", swatch.dataset.color === activeColor);
+    const active = swatch.dataset.color === activeColor;
+    swatch.classList.toggle("active", active);
+    swatch.setAttribute("aria-pressed", String(active));
   }
 }
 
@@ -353,6 +444,66 @@ function updateActionButtons() {
   elements.undoButton.disabled = !note || note.strokes.length === 0;
   elements.redoButton.disabled = redoStack.length === 0;
   elements.clearCanvasButton.disabled = !note || note.strokes.length === 0;
+}
+
+function setCanvasZoom(value) {
+  const nextZoom = clamp(roundZoom(value), minCanvasZoom, maxCanvasZoom);
+  if (nextZoom === canvasZoom) {
+    updateZoomControls();
+    return;
+  }
+
+  canvasZoom = nextZoom;
+  updateZoomControls();
+}
+
+function roundZoom(value) {
+  return Math.round(value * 100) / 100;
+}
+
+function updateZoomControls() {
+  const hasNote = Boolean(getSelectedNote());
+  const zoomPercent = Math.round(canvasZoom * 100);
+
+  elements.canvas.style.width = `${zoomPercent}%`;
+  elements.zoomValue.textContent = `${zoomPercent}%`;
+  elements.zoomResetButton.setAttribute("aria-label", `表示倍率${zoomPercent}%。100%に戻す`);
+  elements.zoomOutButton.disabled = !hasNote || canvasZoom <= minCanvasZoom;
+  elements.zoomResetButton.disabled = !hasNote || canvasZoom === 1;
+  elements.zoomInButton.disabled = !hasNote || canvasZoom >= maxCanvasZoom;
+  updatePaperPattern();
+}
+
+function updatePaperBackground(background) {
+  const note = getSelectedNote();
+  if (!note || !paperBackgrounds.includes(background) || note.paper.background === background) {
+    return;
+  }
+
+  note.paper.background = background;
+  note.updatedAt = new Date().toISOString();
+  persistSoon();
+  render();
+}
+
+function applyPaperToCanvas(paper) {
+  const normalizedPaper = normalizePaper(paper);
+  const size = getPaperSize(normalizedPaper);
+
+  if (elements.canvas.width !== size.width) {
+    elements.canvas.width = size.width;
+  }
+
+  if (elements.canvas.height !== size.height) {
+    elements.canvas.height = size.height;
+  }
+
+  elements.canvas.style.aspectRatio = `${size.width} / ${size.height}`;
+  elements.canvas.dataset.background = normalizedPaper.background;
+}
+
+function getPaperSize(paper) {
+  return paperSizes[paper?.size] ?? paperSizes[defaultPaper.size];
 }
 
 function startStroke(event) {
@@ -427,8 +578,8 @@ function getCanvasPoint(event) {
   const rect = elements.canvas.getBoundingClientRect();
 
   return {
-    x: clamp(((event.clientX - rect.left) / rect.width) * canvasWidth, 0, canvasWidth),
-    y: clamp(((event.clientY - rect.top) / rect.height) * canvasHeight, 0, canvasHeight)
+    x: clamp(((event.clientX - rect.left) / rect.width) * elements.canvas.width, 0, elements.canvas.width),
+    y: clamp(((event.clientY - rect.top) / rect.height) * elements.canvas.height, 0, elements.canvas.height)
   };
 }
 
@@ -437,38 +588,66 @@ function clamp(value, min, max) {
 }
 
 function redrawCanvas() {
-  context.clearRect(0, 0, canvasWidth, canvasHeight);
+  context.clearRect(0, 0, elements.canvas.width, elements.canvas.height);
+
+  syncStrokeLayerSize();
+  strokeLayerContext.clearRect(0, 0, strokeLayer.width, strokeLayer.height);
 
   const note = getSelectedNote();
   if (note) {
     for (const stroke of note.strokes) {
-      drawStroke(stroke);
+      drawStroke(stroke, strokeLayerContext);
     }
   }
 
   if (currentStroke) {
-    drawStroke(currentStroke);
+    drawStroke(currentStroke, strokeLayerContext);
+  }
+
+  context.drawImage(strokeLayer, 0, 0);
+}
+
+function updatePaperPattern() {
+  const rect = elements.canvas.getBoundingClientRect();
+  if (rect.width === 0 || rect.height === 0) {
+    return;
+  }
+
+  const stepX = Math.max(8, Math.round((paperPatternSpacing / elements.canvas.width) * rect.width));
+  const stepY = Math.max(8, Math.round((paperPatternSpacing / elements.canvas.height) * rect.height));
+
+  elements.canvas.style.setProperty("--paper-step-x", `${stepX}px`);
+  elements.canvas.style.setProperty("--paper-step-y", `${stepY}px`);
+}
+
+function syncStrokeLayerSize() {
+  if (strokeLayer.width !== elements.canvas.width) {
+    strokeLayer.width = elements.canvas.width;
+  }
+
+  if (strokeLayer.height !== elements.canvas.height) {
+    strokeLayer.height = elements.canvas.height;
   }
 }
 
-function drawStroke(stroke) {
+function drawStroke(stroke, targetContext = context) {
   if (stroke.points.length === 0) {
     return;
   }
 
-  context.save();
-  context.globalCompositeOperation = stroke.tool === "eraser" ? "destination-out" : "source-over";
-  context.strokeStyle = stroke.color;
-  context.lineWidth = stroke.width;
-  context.lineCap = "round";
-  context.lineJoin = "round";
+  targetContext.save();
+  targetContext.globalCompositeOperation = stroke.tool === "eraser" ? "destination-out" : "source-over";
+  targetContext.strokeStyle = stroke.color;
+  targetContext.lineWidth = stroke.width;
+  targetContext.lineCap = "round";
+  targetContext.lineJoin = "round";
 
   const [firstPoint, ...restPoints] = stroke.points;
-  context.beginPath();
-  context.moveTo(firstPoint.x, firstPoint.y);
+  targetContext.beginPath();
+  targetContext.moveTo(firstPoint.x, firstPoint.y);
 
   if (restPoints.length === 0) {
-    context.lineTo(firstPoint.x + 0.1, firstPoint.y + 0.1);
+    targetContext.lineTo(firstPoint.x + 0.1, firstPoint.y + 0.1);
   } else {
     for (let index = 0; index < restPoints.length; index += 1) {
       const current = restPoints[index];
@@ -477,15 +656,15 @@ function drawStroke(stroke) {
       if (next) {
         const midX = (current.x + next.x) / 2;
         const midY = (current.y + next.y) / 2;
-        context.quadraticCurveTo(current.x, current.y, midX, midY);
+        targetContext.quadraticCurveTo(current.x, current.y, midX, midY);
       } else {
-        context.lineTo(current.x, current.y);
+        targetContext.lineTo(current.x, current.y);
       }
     }
   }
 
-  context.stroke();
-  context.restore();
+  targetContext.stroke();
+  targetContext.restore();
 }
 
 function formatDate(value) {
