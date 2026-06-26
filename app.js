@@ -5,10 +5,9 @@ const selectedKey = "noteapp.web.handwritten.selected.v1";
 const paperSizes = {
   a4: { label: "A4", width: 1400, height: 1980 }
 };
-const paperBackgrounds = ["plain", "lined", "grid"];
-const defaultPaper = { size: "a4", background: "grid" };
+const fixedPaper = { size: "a4", background: "lined" };
 const paperPatternSpacing = 40;
-const defaultStrokeWidth = 6;
+const fixedStrokeWidth = 3;
 
 const elements = {
   skipLink: document.querySelector(".skip-link"),
@@ -21,31 +20,26 @@ const elements = {
   redoButton: document.querySelector("#redoButton"),
   penButton: document.querySelector("#penButton"),
   eraserButton: document.querySelector("#eraserButton"),
-  previousPageButton: document.querySelector("#previousPageButton"),
-  nextPageButton: document.querySelector("#nextPageButton"),
-  addPageButton: document.querySelector("#addPageButton"),
   deletePageButton: document.querySelector("#deletePageButton"),
   pageState: document.querySelector("#pageState"),
   zoomOutButton: document.querySelector("#zoomOutButton"),
   zoomResetButton: document.querySelector("#zoomResetButton"),
   zoomInButton: document.querySelector("#zoomInButton"),
   zoomValue: document.querySelector("#zoomValue"),
-  paperBackgroundSelect: document.querySelector("#paperBackgroundSelect"),
   swatches: [...document.querySelectorAll(".swatch")],
-  widthButtons: [...document.querySelectorAll(".width-option")],
   searchInput: document.querySelector("#searchInput"),
   noteList: document.querySelector("#noteList"),
   titleInput: document.querySelector("#titleInput"),
-  canvas: document.querySelector("#drawingCanvas"),
+  canvasShell: document.querySelector(".canvas-shell"),
+  pageStack: document.querySelector("#pageStack"),
   saveState: document.querySelector("#saveState")
 };
 
-const context = elements.canvas.getContext("2d");
-const strokeLayer = document.createElement("canvas");
-const strokeLayerContext = strokeLayer.getContext("2d");
-const canvasResizeObserver = typeof ResizeObserver === "function"
-  ? new ResizeObserver(updatePaperPattern)
+const pageStackResizeObserver = typeof ResizeObserver === "function"
+  ? new ResizeObserver(updatePaperPatterns)
   : null;
+const pageAnalysisCanvas = document.createElement("canvas");
+const pageAnalysisContext = pageAnalysisCanvas.getContext("2d", { willReadFrequently: true });
 
 let notes = loadNotes();
 let selectedId = localStorage.getItem(selectedKey);
@@ -53,10 +47,10 @@ let saveTimer = null;
 let currentStroke = null;
 let activeTool = "pen";
 let activeColor = "#202124";
-let strokeWidth = defaultStrokeWidth;
 let redoStack = [];
 let currentView = "list";
 let canvasZoom = 1;
+let visiblePageSelectionFrame = null;
 
 const minCanvasZoom = 0.5;
 const maxCanvasZoom = 2;
@@ -68,13 +62,18 @@ if (!notes.some((note) => note.id === selectedId)) {
 
 render();
 
-canvasResizeObserver?.observe(elements.canvas);
-window.addEventListener("resize", updatePaperPattern);
+pageStackResizeObserver?.observe(elements.pageStack);
+elements.canvasShell.addEventListener("scroll", scheduleVisiblePageSelection, { passive: true });
+window.addEventListener("resize", () => {
+  updatePaperPatterns();
+  scheduleVisiblePageSelection();
+});
 
 elements.newNoteButton.addEventListener("click", () => {
   const note = createNote();
   notes = [note, ...notes];
   selectedId = note.id;
+  currentStroke = null;
   redoStack = [];
   currentView = "editor";
   persistSoon();
@@ -103,7 +102,9 @@ elements.clearCanvasButton.addEventListener("click", () => {
   }
 
   page.strokes = [];
+  normalizeAutoPages(note);
   note.updatedAt = new Date().toISOString();
+  currentStroke = null;
   redoStack = [];
   persistSoon();
   render();
@@ -117,7 +118,8 @@ elements.undoButton.addEventListener("click", () => {
   }
 
   const stroke = page.strokes.pop();
-  redoStack.push(stroke);
+  redoStack.push({ pageId: page.id, stroke });
+  normalizeAutoPages(note);
   note.updatedAt = new Date().toISOString();
   persistSoon();
   render();
@@ -125,13 +127,20 @@ elements.undoButton.addEventListener("click", () => {
 
 elements.redoButton.addEventListener("click", () => {
   const note = getSelectedNote();
-  const page = getSelectedPage(note);
-  const stroke = redoStack.pop();
-  if (!note || !page || !stroke) {
+  const redo = redoStack.pop();
+  if (!note || !redo) {
     return;
   }
 
-  page.strokes.push(stroke);
+  const page = getPageById(note, redo.pageId);
+  if (!page) {
+    render();
+    return;
+  }
+
+  note.selectedPageId = page.id;
+  page.strokes.push(redo.stroke);
+  normalizeAutoPages(note, page.id);
   note.updatedAt = new Date().toISOString();
   persistSoon();
   render();
@@ -146,20 +155,6 @@ elements.eraserButton.addEventListener("click", () => {
   activeTool = "eraser";
   updateToolButtons();
 });
-
-elements.paperBackgroundSelect.addEventListener("change", () => {
-  updatePaperBackground(elements.paperBackgroundSelect.value);
-});
-
-elements.previousPageButton.addEventListener("click", () => {
-  selectPageByOffset(-1);
-});
-
-elements.nextPageButton.addEventListener("click", () => {
-  selectPageByOffset(1);
-});
-
-elements.addPageButton.addEventListener("click", addPage);
 
 elements.deletePageButton.addEventListener("click", deleteCurrentPage);
 
@@ -184,13 +179,6 @@ for (const swatch of elements.swatches) {
   });
 }
 
-for (const button of elements.widthButtons) {
-  button.addEventListener("click", () => {
-    strokeWidth = Number(button.dataset.width) || defaultStrokeWidth;
-    updateWidthButtons();
-  });
-}
-
 elements.searchInput.addEventListener("input", renderList);
 
 elements.titleInput.addEventListener("input", () => {
@@ -205,10 +193,6 @@ elements.titleInput.addEventListener("input", () => {
   renderList();
 });
 
-elements.canvas.addEventListener("pointerdown", startStroke);
-elements.canvas.addEventListener("pointermove", continueStroke);
-elements.canvas.addEventListener("pointerup", finishStroke);
-elements.canvas.addEventListener("pointercancel", cancelStroke);
 window.addEventListener("beforeunload", persistNow);
 
 function createNote() {
@@ -218,7 +202,7 @@ function createNote() {
   return {
     id: makeId(),
     title: "",
-    paper: { ...defaultPaper },
+    paper: { ...fixedPaper },
     pages: [firstPage],
     selectedPageId: firstPage.id,
     createdAt: now,
@@ -278,15 +262,15 @@ function normalizeNote(note) {
     ? note.selectedPageId
     : pages[0].id;
 
-  return {
+  return normalizeAutoPages({
     id: note.id,
     title: typeof note.title === "string" ? note.title : "",
-    paper: normalizePaper(note.paper),
+    paper: { ...fixedPaper },
     pages,
     selectedPageId,
     createdAt: typeof note.createdAt === "string" ? note.createdAt : new Date().toISOString(),
     updatedAt: typeof note.updatedAt === "string" ? note.updatedAt : new Date().toISOString()
-  };
+  }, selectedPageId);
 }
 
 function normalizePages(note) {
@@ -309,17 +293,69 @@ function normalizePage(page) {
   };
 }
 
-function normalizePaper(paper) {
-  const background = paperBackgrounds.includes(paper?.background) ? paper.background : defaultPaper.background;
+function normalizeAutoPages(note, preferredPageId = note?.selectedPageId) {
+  if (!note) {
+    return note;
+  }
 
-  return { size: defaultPaper.size, background };
+  if (!Array.isArray(note.pages) || note.pages.length === 0) {
+    note.pages = [createPage()];
+  }
+
+  while (
+    note.pages.length > 1
+    && !hasPageDrawing(note.pages[note.pages.length - 1])
+    && !hasPageDrawing(note.pages[note.pages.length - 2])
+  ) {
+    note.pages.pop();
+  }
+
+  if (hasPageDrawing(note.pages[note.pages.length - 1])) {
+    note.pages.push(createPage());
+  }
+
+  if (note.pages.some((page) => page.id === preferredPageId)) {
+    note.selectedPageId = preferredPageId;
+  } else if (!note.pages.some((page) => page.id === note.selectedPageId)) {
+    note.selectedPageId = note.pages[note.pages.length - 1].id;
+  }
+
+  return note;
+}
+
+function hasPageDrawing(page) {
+  if (!page?.strokes.some((stroke) => stroke.tool === "pen")) {
+    return false;
+  }
+
+  const size = getPaperSize();
+  if (pageAnalysisCanvas.width !== size.width) {
+    pageAnalysisCanvas.width = size.width;
+  }
+
+  if (pageAnalysisCanvas.height !== size.height) {
+    pageAnalysisCanvas.height = size.height;
+  }
+
+  pageAnalysisContext.clearRect(0, 0, pageAnalysisCanvas.width, pageAnalysisCanvas.height);
+  for (const stroke of page.strokes) {
+    drawStroke(stroke, pageAnalysisContext);
+  }
+
+  const pixels = pageAnalysisContext.getImageData(0, 0, pageAnalysisCanvas.width, pageAnalysisCanvas.height).data;
+  for (let index = 3; index < pixels.length; index += 4) {
+    if (pixels[index] > 0) {
+      return true;
+    }
+  }
+
+  return false;
 }
 
 function isValidStroke(stroke) {
   return stroke
     && (stroke.tool === "pen" || stroke.tool === "eraser")
     && typeof stroke.color === "string"
-    && typeof stroke.width === "number"
     && Array.isArray(stroke.points)
     && stroke.points.every(isValidPoint);
 }
@@ -339,7 +375,11 @@ function getSelectedPage(note = getSelectedNote()) {
     return null;
   }
 
-  return note.pages.find((page) => page.id === note.selectedPageId) ?? note.pages[0] ?? null;
+  return getPageById(note, note.selectedPageId) ?? note.pages[0] ?? null;
+}
+
+function getPageById(note, pageId) {
+  return note?.pages.find((page) => page.id === pageId) ?? null;
 }
 
 function getSelectedPageIndex(note = getSelectedNote()) {
@@ -381,10 +421,9 @@ function render() {
   renderEditor();
   renderList();
   updateZoomControls();
-  redrawCanvas();
+  redrawCanvases();
   updateToolButtons();
   updateSwatches();
-  updateWidthButtons();
   updatePageControls();
   updateActionButtons();
   updateSaveState();
@@ -395,8 +434,8 @@ function renderView() {
 
   elements.listView.hidden = showEditor;
   elements.editorView.hidden = !showEditor;
-  elements.skipLink.href = showEditor ? "#drawingCanvas" : "#noteList";
-  elements.skipLink.textContent = showEditor ? "キャンバスへ移動" : "ノート一覧へ移動";
+  elements.skipLink.href = showEditor ? "#pageStack" : "#noteList";
+  elements.skipLink.textContent = showEditor ? "ページへ移動" : "ノート一覧へ移動";
 
   if (!showEditor) {
     currentView = "list";
@@ -409,14 +448,38 @@ function renderEditor() {
   const page = getSelectedPage(note);
 
   elements.titleInput.disabled = !hasNote;
-  elements.paperBackgroundSelect.disabled = !hasNote;
   elements.clearCanvasButton.disabled = !hasNote || !page || page.strokes.length === 0;
   elements.titleInput.value = note?.title ?? "";
+  renderPageStack(note);
+}
 
-  if (note) {
-    applyPaperToCanvas(note.paper);
-    elements.paperBackgroundSelect.value = note.paper.background;
+function renderPageStack(note) {
+  elements.pageStack.replaceChildren();
+  if (!note) {
+    return;
   }
+
+  const size = getPaperSize();
+  note.pages.forEach((page, index) => {
+    const canvas = document.createElement("canvas");
+    canvas.className = page.id === note.selectedPageId ? "drawing-canvas active" : "drawing-canvas";
+    canvas.width = size.width;
+    canvas.height = size.height;
+    canvas.dataset.pageId = page.id;
+    canvas.dataset.background = fixedPaper.background;
+    canvas.style.aspectRatio = `${size.width} / ${size.height}`;
+    canvas.tabIndex = 0;
+    canvas.setAttribute("aria-label", `ページ ${index + 1}`);
+    canvas.addEventListener("pointerdown", startStroke);
+    canvas.addEventListener("pointermove", continueStroke);
+    canvas.addEventListener("pointerup", finishStroke);
+    canvas.addEventListener("pointercancel", cancelStroke);
+    canvas.addEventListener("focus", () => {
+      selectPage(page.id);
+    });
+
+    elements.pageStack.append(canvas);
+  });
 }
 
 function renderList() {
@@ -470,7 +533,7 @@ function renderList() {
       redoStack = [];
       persistNow();
       render();
-      elements.canvas.focus();
+      focusSelectedPage();
     });
 
     const deleteButton = document.createElement("button");
@@ -510,25 +573,29 @@ function updateSwatches() {
   }
 }
 
-function updateWidthButtons() {
-  for (const button of elements.widthButtons) {
-    const active = Number(button.dataset.width) === strokeWidth;
-    button.classList.toggle("active", active);
-    button.setAttribute("aria-pressed", String(active));
-  }
-}
-
 function updatePageControls() {
   const note = getSelectedNote();
   const pageIndex = getSelectedPageIndex(note);
   const pageCount = note?.pages.length ?? 0;
   const pageNumber = pageIndex >= 0 ? pageIndex + 1 : 0;
+  const page = getSelectedPage(note);
+  const selectedPageIsAutoBlank = Boolean(
+    note
+    && page
+    && pageIndex === pageCount - 1
+    && !hasPageDrawing(page)
+  );
 
   elements.pageState.textContent = pageCount > 0 ? `${pageNumber} / ${pageCount}` : "0 / 0";
-  elements.previousPageButton.disabled = !note || pageIndex <= 0;
-  elements.nextPageButton.disabled = !note || pageIndex < 0 || pageIndex >= pageCount - 1;
-  elements.addPageButton.disabled = !note;
-  elements.deletePageButton.disabled = !note || pageCount <= 1;
+  elements.deletePageButton.disabled = !note || pageCount <= 1 || selectedPageIsAutoBlank;
+  updatePageSelection();
+}
+
+function updatePageSelection() {
+  const note = getSelectedNote();
+  for (const canvas of getPageCanvases()) {
+    canvas.classList.toggle("active", Boolean(note) && canvas.dataset.pageId === note.selectedPageId);
+  }
 }
 
 function updateActionButtons() {
@@ -548,6 +615,7 @@ function setCanvasZoom(value) {
 
   canvasZoom = nextZoom;
   updateZoomControls();
+  scheduleVisiblePageSelection();
 }
 
 function roundZoom(value) {
@@ -558,25 +626,16 @@ function updateZoomControls() {
   const hasNote = Boolean(getSelectedNote());
   const zoomPercent = Math.round(canvasZoom * 100);
 
-  elements.canvas.style.width = `${zoomPercent}%`;
+  for (const canvas of getPageCanvases()) {
+    canvas.style.width = `${zoomPercent}%`;
+  }
+
   elements.zoomValue.textContent = `${zoomPercent}%`;
   elements.zoomResetButton.setAttribute("aria-label", `表示倍率${zoomPercent}%。100%に戻す`);
   elements.zoomOutButton.disabled = !hasNote || canvasZoom <= minCanvasZoom;
   elements.zoomResetButton.disabled = !hasNote || canvasZoom === 1;
   elements.zoomInButton.disabled = !hasNote || canvasZoom >= maxCanvasZoom;
-  updatePaperPattern();
-}
-
-function updatePaperBackground(background) {
-  const note = getSelectedNote();
-  if (!note || !paperBackgrounds.includes(background) || note.paper.background === background) {
-    return;
-  }
-
-  note.paper.background = background;
-  note.updatedAt = new Date().toISOString();
-  persistSoon();
-  render();
+  updatePaperPatterns();
 }
 
 function deleteNote(noteId) {
@@ -604,42 +663,62 @@ function deleteNote(noteId) {
   elements.searchInput.focus();
 }
 
-function selectPageByOffset(offset) {
+function selectPage(pageId) {
   const note = getSelectedNote();
-  const pageIndex = getSelectedPageIndex(note);
-  if (!note || pageIndex < 0) {
+  if (!note || note.selectedPageId === pageId || !getPageById(note, pageId)) {
     return;
   }
 
-  const nextIndex = clamp(pageIndex + offset, 0, note.pages.length - 1);
-  const nextPage = note.pages[nextIndex];
-  if (!nextPage || nextPage.id === note.selectedPageId) {
-    return;
-  }
-
-  note.selectedPageId = nextPage.id;
-  currentStroke = null;
+  note.selectedPageId = pageId;
   redoStack = [];
-  persistNow();
-  render();
-  elements.canvas.focus();
+  updatePageControls();
+  updateActionButtons();
 }
 
-function addPage() {
-  const note = getSelectedNote();
-  if (!note) {
+function scheduleVisiblePageSelection() {
+  if (visiblePageSelectionFrame !== null) {
     return;
   }
 
-  const page = createPage();
-  note.pages.push(page);
-  note.selectedPageId = page.id;
-  note.updatedAt = new Date().toISOString();
-  currentStroke = null;
-  redoStack = [];
-  persistSoon();
-  render();
-  elements.canvas.focus();
+  visiblePageSelectionFrame = window.requestAnimationFrame(() => {
+    visiblePageSelectionFrame = null;
+    selectMostlyVisiblePage();
+  });
+}
+
+function selectMostlyVisiblePage() {
+  const note = getSelectedNote();
+  if (currentView !== "editor" || !note || currentStroke) {
+    return;
+  }
+
+  const shellRect = elements.canvasShell.getBoundingClientRect();
+  const shellHeight = shellRect.height;
+  if (shellHeight <= 0) {
+    return;
+  }
+
+  let bestPageId = null;
+  let bestVisibleRatio = 0;
+
+  for (const canvas of getPageCanvases()) {
+    const rect = canvas.getBoundingClientRect();
+    const visibleTop = Math.max(rect.top, shellRect.top);
+    const visibleBottom = Math.min(rect.bottom, shellRect.bottom);
+    const visibleHeight = Math.max(0, visibleBottom - visibleTop);
+    const visibleRatio = visibleHeight / shellHeight;
+
+    if (visibleRatio >= 0.5 && visibleRatio > bestVisibleRatio) {
+      bestPageId = canvas.dataset.pageId;
+      bestVisibleRatio = visibleRatio;
+    }
+  }
+
+  if (bestPageId && bestPageId !== note.selectedPageId) {
+    note.selectedPageId = bestPageId;
+    updatePageControls();
+    updateActionButtons();
+  }
 }
 
 function deleteCurrentPage() {
@@ -657,110 +736,108 @@ function deleteCurrentPage() {
   note.pages.splice(pageIndex, 1);
   const nextIndex = Math.min(pageIndex, note.pages.length - 1);
   note.selectedPageId = note.pages[nextIndex].id;
+  normalizeAutoPages(note, note.selectedPageId);
   note.updatedAt = new Date().toISOString();
   currentStroke = null;
   redoStack = [];
   persistSoon();
   render();
-  elements.canvas.focus();
+  focusSelectedPage();
 }
 
-function applyPaperToCanvas(paper) {
-  const normalizedPaper = normalizePaper(paper);
-  const size = getPaperSize(normalizedPaper);
-
-  if (elements.canvas.width !== size.width) {
-    elements.canvas.width = size.width;
-  }
-
-  if (elements.canvas.height !== size.height) {
-    elements.canvas.height = size.height;
-  }
-
-  elements.canvas.style.aspectRatio = `${size.width} / ${size.height}`;
-  elements.canvas.dataset.background = normalizedPaper.background;
-}
-
-function getPaperSize(paper) {
-  return paperSizes[paper?.size] ?? paperSizes[defaultPaper.size];
+function getPaperSize() {
+  return paperSizes[fixedPaper.size];
 }
 
 function startStroke(event) {
   const note = getSelectedNote();
-  const page = getSelectedPage(note);
+  const canvas = event.currentTarget;
+  const page = getPageById(note, canvas.dataset.pageId);
   if (!note || !page || event.button !== 0) {
     return;
   }
 
   event.preventDefault();
-  elements.canvas.setPointerCapture(event.pointerId);
+  selectPage(page.id);
+  canvas.setPointerCapture(event.pointerId);
 
-  const point = getCanvasPoint(event);
+  const point = getCanvasPoint(event, canvas);
   currentStroke = {
-    tool: activeTool,
-    color: activeTool === "eraser" ? "#000000" : activeColor,
-    width: activeTool === "eraser" ? strokeWidth * 3 : strokeWidth,
-    points: [point]
+    pageId: page.id,
+    canvas,
+    stroke: {
+      tool: activeTool,
+      color: activeTool === "eraser" ? "#000000" : activeColor,
+      width: activeTool === "eraser" ? fixedStrokeWidth * 3 : fixedStrokeWidth,
+      points: [point]
+    }
   };
 
-  redrawCanvas();
+  redrawPage(page.id);
 }
 
 function continueStroke(event) {
-  if (!currentStroke) {
+  if (!currentStroke || event.currentTarget !== currentStroke.canvas) {
     return;
   }
 
   event.preventDefault();
-  const point = getCanvasPoint(event);
-  const lastPoint = currentStroke.points[currentStroke.points.length - 1];
+  const point = getCanvasPoint(event, currentStroke.canvas);
+  const lastPoint = currentStroke.stroke.points[currentStroke.stroke.points.length - 1];
   const distance = Math.hypot(point.x - lastPoint.x, point.y - lastPoint.y);
 
   if (distance >= 1.5) {
-    currentStroke.points.push(point);
-    redrawCanvas();
+    currentStroke.stroke.points.push(point);
+    redrawPage(currentStroke.pageId);
   }
 }
 
 function finishStroke(event) {
-  if (!currentStroke) {
+  if (!currentStroke || event.currentTarget !== currentStroke.canvas) {
     return;
   }
 
   event.preventDefault();
 
   const note = getSelectedNote();
-  const page = getSelectedPage(note);
+  const page = getPageById(note, currentStroke.pageId);
   if (note && page) {
-    page.strokes.push(currentStroke);
+    page.strokes.push(currentStroke.stroke);
+    normalizeAutoPages(note, page.id);
     note.updatedAt = new Date().toISOString();
     notes = sortNotes(notes);
     redoStack = [];
     persistSoon();
   }
 
-  currentStroke = null;
-  if (elements.canvas.hasPointerCapture(event.pointerId)) {
-    elements.canvas.releasePointerCapture(event.pointerId);
+  if (currentStroke.canvas.hasPointerCapture(event.pointerId)) {
+    currentStroke.canvas.releasePointerCapture(event.pointerId);
   }
+
+  currentStroke = null;
   render();
 }
 
 function cancelStroke(event) {
-  if (currentStroke && elements.canvas.hasPointerCapture(event.pointerId)) {
-    elements.canvas.releasePointerCapture(event.pointerId);
+  const canvas = currentStroke?.canvas;
+  const pageId = currentStroke?.pageId;
+
+  if (canvas?.hasPointerCapture(event.pointerId)) {
+    canvas.releasePointerCapture(event.pointerId);
   }
 
   currentStroke = null;
-  redrawCanvas();
+  if (pageId) {
+    redrawPage(pageId);
+  }
 }
 
-function getCanvasPoint(event) {
-  const rect = elements.canvas.getBoundingClientRect();
+function getCanvasPoint(event, canvas) {
+  const rect = canvas.getBoundingClientRect();
 
   return {
-    x: clamp(((event.clientX - rect.left) / rect.width) * elements.canvas.width, 0, elements.canvas.width),
-    y: clamp(((event.clientY - rect.top) / rect.height) * elements.canvas.height, 0, elements.canvas.height)
+    x: clamp(((event.clientX - rect.left) / rect.width) * canvas.width, 0, canvas.width),
+    y: clamp(((event.clientY - rect.top) / rect.height) * canvas.height, 0, canvas.height)
   };
 }
 
@@ -768,51 +845,48 @@ function clamp(value, min, max) {
   return Math.min(Math.max(value, min), max);
 }
 
-function redrawCanvas() {
-  context.clearRect(0, 0, elements.canvas.width, elements.canvas.height);
-
-  syncStrokeLayerSize();
-  strokeLayerContext.clearRect(0, 0, strokeLayer.width, strokeLayer.height);
-
-  const note = getSelectedNote();
-  const page = getSelectedPage(note);
-  if (page) {
-    for (const stroke of page.strokes) {
-      drawStroke(stroke, strokeLayerContext);
-    }
+function redrawCanvases() {
+  for (const canvas of getPageCanvases()) {
+    redrawPage(canvas.dataset.pageId);
   }
-
-  if (currentStroke) {
-    drawStroke(currentStroke, strokeLayerContext);
-  }
-
-  context.drawImage(strokeLayer, 0, 0);
 }
 
-function updatePaperPattern() {
-  const rect = elements.canvas.getBoundingClientRect();
-  if (rect.width === 0 || rect.height === 0) {
+function redrawPage(pageId) {
+  const note = getSelectedNote();
+  const page = getPageById(note, pageId);
+  const canvas = getPageCanvas(pageId);
+  if (!page || !canvas) {
     return;
   }
 
-  const stepX = Math.max(8, Math.round((paperPatternSpacing / elements.canvas.width) * rect.width));
-  const stepY = Math.max(8, Math.round((paperPatternSpacing / elements.canvas.height) * rect.height));
+  const context = canvas.getContext("2d");
+  context.clearRect(0, 0, canvas.width, canvas.height);
 
-  elements.canvas.style.setProperty("--paper-step-x", `${stepX}px`);
-  elements.canvas.style.setProperty("--paper-step-y", `${stepY}px`);
-}
-
-function syncStrokeLayerSize() {
-  if (strokeLayer.width !== elements.canvas.width) {
-    strokeLayer.width = elements.canvas.width;
+  for (const stroke of page.strokes) {
+    drawStroke(stroke, context);
   }
 
-  if (strokeLayer.height !== elements.canvas.height) {
-    strokeLayer.height = elements.canvas.height;
+  if (currentStroke?.pageId === pageId) {
+    drawStroke(currentStroke.stroke, context);
   }
 }
 
-function drawStroke(stroke, targetContext = context) {
+function updatePaperPatterns() {
+  for (const canvas of getPageCanvases()) {
+    const rect = canvas.getBoundingClientRect();
+    if (rect.width === 0 || rect.height === 0) {
+      continue;
+    }
+
+    const stepX = Math.max(8, Math.round((paperPatternSpacing / canvas.width) * rect.width));
+    const stepY = Math.max(8, Math.round((paperPatternSpacing / canvas.height) * rect.height));
+
+    canvas.style.setProperty("--paper-step-x", `${stepX}px`);
+    canvas.style.setProperty("--paper-step-y", `${stepY}px`);
+  }
+}
+
+function drawStroke(stroke, targetContext) {
   if (stroke.points.length === 0) {
     return;
   }
@@ -820,7 +894,7 @@ function drawStroke(stroke, targetContext = context) {
   targetContext.save();
   targetContext.globalCompositeOperation = stroke.tool === "eraser" ? "destination-out" : "source-over";
   targetContext.strokeStyle = stroke.color;
-  targetContext.lineWidth = stroke.width;
+  targetContext.lineWidth = stroke.tool === "eraser" ? fixedStrokeWidth * 3 : fixedStrokeWidth;
   targetContext.lineCap = "round";
   targetContext.lineJoin = "round";
 
@@ -847,6 +921,23 @@ function drawStroke(stroke, targetContext = context) {
 
   targetContext.stroke();
   targetContext.restore();
+}
+
+function getPageCanvases() {
+  return [...elements.pageStack.querySelectorAll(".drawing-canvas")];
+}
+
+function getPageCanvas(pageId) {
+  return getPageCanvases().find((canvas) => canvas.dataset.pageId === pageId) ?? null;
+}
+
+function focusSelectedPage() {
+  window.requestAnimationFrame(() => {
+    const page = getSelectedPage();
+    const canvas = page ? getPageCanvas(page.id) : null;
+    canvas?.focus();
+    canvas?.scrollIntoView({ block: "nearest", inline: "nearest" });
+  });
 }
 
 function formatDate(value) {

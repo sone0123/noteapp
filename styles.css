@@ -135,9 +135,8 @@ button {
 .note-open:focus-visible,
 .title-input:focus-visible,
 .drawing-canvas:focus-visible,
-.swatch:focus-visible,
-.width-option:focus-visible,
-.select-control:focus-within {
+.page-stack:focus-visible,
+.swatch:focus-visible {
   outline: 3px solid var(--focus);
   outline-offset: 2px;
 }
@@ -362,68 +361,7 @@ button {
     inset 0 0 0 1px rgba(0, 0, 0, 0.12);
 }
 
-.width-options {
-  display: flex;
-  align-items: center;
-  gap: 4px;
-  min-height: 40px;
-  flex: 0 0 auto;
-  padding: 0 6px;
-  border: 1px solid var(--line);
-  border-radius: 8px;
-  background: var(--surface);
-  color: var(--muted);
-}
-
-.width-option {
-  display: inline-grid;
-  width: 30px;
-  height: 30px;
-  place-items: center;
-  border: 1px solid transparent;
-  border-radius: 8px;
-  background: transparent;
-  color: var(--ink);
-}
-
-.width-option span {
-  width: var(--dot-size);
-  height: var(--dot-size);
-  border-radius: 999px;
-  background: currentColor;
-}
-
-.width-option.active {
-  border-color: var(--accent);
-  background: var(--accent-soft);
-  color: var(--accent);
-}
-
-.select-control {
-  display: grid;
-  align-items: center;
-  min-height: 40px;
-  flex: 0 0 auto;
-}
-
-.select-control select {
-  min-width: 76px;
-  height: 40px;
-  padding: 0 30px 0 10px;
-  border: 1px solid var(--line);
-  border-radius: 8px;
-  background: var(--surface);
-  color: var(--ink);
-}
-
 .zoom-controls {
-  display: flex;
-  align-items: center;
-  gap: 4px;
-  flex: 0 0 auto;
-}
-
-.page-controls {
   display: flex;
   align-items: center;
   gap: 4px;
@@ -461,6 +399,14 @@ button {
   padding: 12px;
 }
 
+.page-stack {
+  display: grid;
+  align-content: start;
+  gap: 34px;
+  min-height: 100%;
+  outline: 0;
+}
+
 .drawing-canvas {
   --paper-step-x: 28px;
   --paper-step-y: 28px;
@@ -478,26 +424,18 @@ button {
   user-select: none;
 }
 
+.drawing-canvas.active {
+  box-shadow:
+    0 0 0 2px rgba(47, 111, 115, 0.35),
+    var(--paper-shadow);
+}
+
 .drawing-canvas[data-background="lined"] {
   background-image: repeating-linear-gradient(
     to bottom,
     transparent 0 calc(var(--paper-step-y) - 1px),
     var(--paper-line-color) calc(var(--paper-step-y) - 1px) var(--paper-step-y)
   );
-}
-
-.drawing-canvas[data-background="grid"] {
-  background-image:
-    repeating-linear-gradient(
-      to right,
-      transparent 0 calc(var(--paper-step-x) - 1px),
-      var(--paper-line-color) calc(var(--paper-step-x) - 1px) var(--paper-step-x)
-    ),
-    repeating-linear-gradient(
-      to bottom,
-      transparent 0 calc(var(--paper-step-y) - 1px),
-      var(--paper-line-color) calc(var(--paper-step-y) - 1px) var(--paper-step-y)
-    );
 }
 
 @media (min-width: 700px) {
@@ -519,7 +457,7 @@ button {
   }
 
   .editor-toolbar {
-    justify-content: center;
+    justify-content: flex-start;
     padding: 9px 14px;
   }
 
@@ -534,5 +472,9 @@ button {
   .canvas-shell {
     border-radius: 8px;
     padding: 18px;
+  }
+
+  .page-stack {
+    gap: 44px;
   }
 }
