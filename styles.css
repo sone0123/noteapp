@@ -285,6 +285,9 @@ button {
   display: grid;
   grid-template-rows: auto auto minmax(0, 1fr);
   background: var(--workspace);
+  -webkit-touch-callout: none;
+  -webkit-user-select: none;
+  user-select: none;
 }
 
 .editor-header {
@@ -309,6 +312,8 @@ button {
   font-weight: 650;
   letter-spacing: 0;
   outline: 0;
+  -webkit-user-select: text;
+  user-select: text;
 }
 
 .document-actions {
@@ -421,6 +426,8 @@ button {
   cursor: crosshair;
   outline: 0;
   touch-action: none;
+  -webkit-touch-callout: none;
+  -webkit-user-select: none;
   user-select: none;
 }
 

@@ -455,6 +455,7 @@ function renderPageStack(note) {
     canvas.addEventListener("pointermove", continueStroke);
     canvas.addEventListener("pointerup", finishStroke);
     canvas.addEventListener("pointercancel", cancelStroke);
+    canvas.addEventListener("contextmenu", preventCanvasGestureMenu);
     canvas.addEventListener("focus", () => {
       selectPage(page.id);
     });
@@ -921,6 +922,11 @@ function startStroke(event) {
     return;
   }
 
+  if (currentStroke || !canUsePointerForDrawing(event)) {
+    event.preventDefault();
+    return;
+  }
+
   event.preventDefault();
   selectPage(page.id);
   canvas.setPointerCapture(event.pointerId);
@@ -931,6 +937,7 @@ function startStroke(event) {
       type: "stroke-eraser",
       pageId: page.id,
       canvas,
+      pointerId: event.pointerId,
       deleted: []
     };
     eraseStrokesAtPoint(page, point, canvas, currentStroke.deleted);
@@ -941,6 +948,7 @@ function startStroke(event) {
     type: "draw",
     pageId: page.id,
     canvas,
+    pointerId: event.pointerId,
     stroke: {
       tool: activeTool,
       color: activeTool === "eraser" ? "#000000" : activeColor,
@@ -953,7 +961,8 @@ function startStroke(event) {
 }
 
 function continueStroke(event) {
-  if (!currentStroke || event.currentTarget !== currentStroke.canvas) {
+  if (!isCurrentStrokePointer(event)) {
+    preventIgnoredCanvasInput(event);
     return;
   }
 
@@ -979,7 +988,8 @@ function continueStroke(event) {
 }
 
 function finishStroke(event) {
-  if (!currentStroke || event.currentTarget !== currentStroke.canvas) {
+  if (!isCurrentStrokePointer(event)) {
+    preventIgnoredCanvasInput(event);
     return;
   }
 
@@ -1019,6 +1029,11 @@ function finishStroke(event) {
 }
 
 function cancelStroke(event) {
+  if (!isCurrentStrokePointer(event)) {
+    preventIgnoredCanvasInput(event);
+    return;
+  }
+
   const strokeAction = currentStroke;
   const canvas = strokeAction?.canvas;
   const pageId = strokeAction?.pageId;
@@ -1036,6 +1051,28 @@ function cancelStroke(event) {
   if (pageId) {
     redrawPage(pageId);
   }
+}
+
+function canUsePointerForDrawing(event) {
+  return event.pointerType !== "touch";
+}
+
+function isCurrentStrokePointer(event) {
+  return Boolean(
+    currentStroke
+    && event.currentTarget === currentStroke.canvas
+    && event.pointerId === currentStroke.pointerId
+  );
+}
+
+function preventIgnoredCanvasInput(event) {
+  if (event.pointerType === "touch") {
+    event.preventDefault();
+  }
+}
+
+function preventCanvasGestureMenu(event) {
+  event.preventDefault();
 }
 
 function finishStrokeErase(strokeAction) {
