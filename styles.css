@@ -316,6 +316,12 @@ button {
   user-select: text;
 }
 
+.editor-page[data-input-mode="stylus"] .title-input {
+  -webkit-touch-callout: none;
+  -webkit-user-select: none;
+  user-select: none;
+}
+
 .document-actions {
   display: flex;
   align-items: center;
@@ -425,7 +431,7 @@ button {
   box-shadow: var(--paper-shadow);
   cursor: crosshair;
   outline: 0;
-  touch-action: none;
+  touch-action: pan-x pan-y;
   -webkit-touch-callout: none;
   -webkit-user-select: none;
   user-select: none;

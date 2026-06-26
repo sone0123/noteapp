@@ -54,6 +54,7 @@ let redoStack = [];
 let currentView = "list";
 let canvasZoom = 1;
 let visiblePageSelectionFrame = null;
+let stylusModeActive = false;
 
 const minCanvasZoom = 0.5;
 const maxCanvasZoom = 2;
@@ -156,6 +157,8 @@ for (const swatch of elements.swatches) {
 }
 
 elements.searchInput.addEventListener("input", renderList);
+elements.editorView.addEventListener("selectstart", preventEditorSelectionInStylusMode);
+elements.editorView.addEventListener("touchstart", clearEditorSelectionInStylusMode, { passive: true });
 
 elements.titleInput.addEventListener("input", () => {
   const note = getSelectedNote();
@@ -408,6 +411,7 @@ function render() {
   updatePageControls();
   updateActionButtons();
   updateSaveState();
+  updateInputMode();
 }
 
 function renderView() {
@@ -922,12 +926,18 @@ function startStroke(event) {
     return;
   }
 
+  if (event.pointerType === "pen") {
+    activateStylusMode();
+  }
+
   if (currentStroke || !canUsePointerForDrawing(event)) {
-    event.preventDefault();
+    preventIgnoredCanvasInput(event);
     return;
   }
 
   event.preventDefault();
+  elements.titleInput.blur();
+  clearTextSelection();
   selectPage(page.id);
   canvas.setPointerCapture(event.pointerId);
 
@@ -1066,13 +1076,47 @@ function isCurrentStrokePointer(event) {
 }
 
 function preventIgnoredCanvasInput(event) {
-  if (event.pointerType === "touch") {
+  clearEditorSelectionInStylusMode();
+  if (event.pointerType !== "touch") {
     event.preventDefault();
   }
 }
 
 function preventCanvasGestureMenu(event) {
   event.preventDefault();
+}
+
+function activateStylusMode() {
+  if (!stylusModeActive) {
+    stylusModeActive = true;
+    updateInputMode();
+  }
+}
+
+function updateInputMode() {
+  elements.editorView.dataset.inputMode = stylusModeActive ? "stylus" : "default";
+}
+
+function preventEditorSelectionInStylusMode(event) {
+  if (!stylusModeActive) {
+    return;
+  }
+
+  event.preventDefault();
+  clearTextSelection();
+}
+
+function clearEditorSelectionInStylusMode() {
+  if (stylusModeActive) {
+    clearTextSelection();
+  }
+}
+
+function clearTextSelection() {
+  const selection = globalThis.getSelection?.();
+  if (selection && !selection.isCollapsed) {
+    selection.removeAllRanges();
+  }
 }
 
 function finishStrokeErase(strokeAction) {
