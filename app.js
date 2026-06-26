@@ -8,6 +8,7 @@ const paperSizes = {
 const fixedPaper = { size: "a4", background: "lined" };
 const paperPatternSpacing = 40;
 const fixedStrokeWidth = 3;
+const strokeEraserScreenRadius = 9;
 
 const elements = {
   skipLink: document.querySelector(".skip-link"),
@@ -20,6 +21,7 @@ const elements = {
   redoButton: document.querySelector("#redoButton"),
   penButton: document.querySelector("#penButton"),
   eraserButton: document.querySelector("#eraserButton"),
+  strokeEraserButton: document.querySelector("#strokeEraserButton"),
   deletePageButton: document.querySelector("#deletePageButton"),
   pageState: document.querySelector("#pageState"),
   zoomOutButton: document.querySelector("#zoomOutButton"),
@@ -47,6 +49,7 @@ let saveTimer = null;
 let currentStroke = null;
 let activeTool = "pen";
 let activeColor = "#202124";
+let undoStack = [];
 let redoStack = [];
 let currentView = "list";
 let canvasZoom = 1;
@@ -74,7 +77,7 @@ elements.newNoteButton.addEventListener("click", () => {
   notes = [note, ...notes];
   selectedId = note.id;
   currentStroke = null;
-  redoStack = [];
+  clearHistory();
   currentView = "editor";
   persistSoon();
   render();
@@ -105,46 +108,14 @@ elements.clearCanvasButton.addEventListener("click", () => {
   normalizeAutoPages(note);
   note.updatedAt = new Date().toISOString();
   currentStroke = null;
-  redoStack = [];
+  clearHistory();
   persistSoon();
   render();
 });
 
-elements.undoButton.addEventListener("click", () => {
-  const note = getSelectedNote();
-  const page = getSelectedPage(note);
-  if (!note || !page || page.strokes.length === 0) {
-    return;
-  }
+elements.undoButton.addEventListener("click", undoLastAction);
 
-  const stroke = page.strokes.pop();
-  redoStack.push({ pageId: page.id, stroke });
-  normalizeAutoPages(note);
-  note.updatedAt = new Date().toISOString();
-  persistSoon();
-  render();
-});
-
-elements.redoButton.addEventListener("click", () => {
-  const note = getSelectedNote();
-  const redo = redoStack.pop();
-  if (!note || !redo) {
-    return;
-  }
-
-  const page = getPageById(note, redo.pageId);
-  if (!page) {
-    render();
-    return;
-  }
-
-  note.selectedPageId = page.id;
-  page.strokes.push(redo.stroke);
-  normalizeAutoPages(note, page.id);
-  note.updatedAt = new Date().toISOString();
-  persistSoon();
-  render();
-});
+elements.redoButton.addEventListener("click", redoLastAction);
 
 elements.penButton.addEventListener("click", () => {
   activeTool = "pen";
@@ -153,6 +124,11 @@ elements.penButton.addEventListener("click", () => {
 
 elements.eraserButton.addEventListener("click", () => {
   activeTool = "eraser";
+  updateToolButtons();
+});
+
+elements.strokeEraserButton.addEventListener("click", () => {
+  activeTool = "stroke-eraser";
   updateToolButtons();
 });
 
@@ -223,6 +199,11 @@ function makeId() {
   }
 
   return `note-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+}
+
+function clearHistory() {
+  undoStack = [];
+  redoStack = [];
 }
 
 function loadNotes() {
@@ -530,7 +511,7 @@ function renderList() {
       selectedId = note.id;
       currentView = "editor";
       currentStroke = null;
-      redoStack = [];
+      clearHistory();
       persistNow();
       render();
       focusSelectedPage();
@@ -558,11 +539,15 @@ function renderList() {
 function updateToolButtons() {
   const penActive = activeTool === "pen";
   const eraserActive = activeTool === "eraser";
+  const strokeEraserActive = activeTool === "stroke-eraser";
 
   elements.penButton.classList.toggle("active", penActive);
   elements.eraserButton.classList.toggle("active", eraserActive);
+  elements.strokeEraserButton.classList.toggle("active", strokeEraserActive);
   elements.penButton.setAttribute("aria-pressed", String(penActive));
   elements.eraserButton.setAttribute("aria-pressed", String(eraserActive));
+  elements.strokeEraserButton.setAttribute("aria-pressed", String(strokeEraserActive));
+  elements.pageStack.dataset.tool = activeTool;
 }
 
 function updateSwatches() {
@@ -601,9 +586,188 @@ function updatePageSelection() {
 function updateActionButtons() {
   const note = getSelectedNote();
   const page = getSelectedPage(note);
-  elements.undoButton.disabled = !note || !page || page.strokes.length === 0;
+  const hasFallbackUndo = Boolean(page && page.strokes.length > 0);
+  elements.undoButton.disabled = !note || (!hasFallbackUndo && undoStack.length === 0);
   elements.redoButton.disabled = redoStack.length === 0;
   elements.clearCanvasButton.disabled = !note || !page || page.strokes.length === 0;
+}
+
+function undoLastAction() {
+  const note = getSelectedNote();
+  if (!note) {
+    return;
+  }
+
+  const action = undoStack.pop();
+  if (action) {
+    if (undoAction(note, action)) {
+      redoStack.push(action);
+      completeHistoryMutation(note, action.pageId);
+    } else {
+      render();
+    }
+    return;
+  }
+
+  const page = getSelectedPage(note);
+  if (!page || page.strokes.length === 0) {
+    return;
+  }
+
+  const stroke = page.strokes.pop();
+  redoStack.push({
+    type: "add-stroke",
+    pageId: page.id,
+    pageIndex: note.pages.findIndex((item) => item.id === page.id),
+    stroke
+  });
+  completeHistoryMutation(note, page.id);
+}
+
+function redoLastAction() {
+  const note = getSelectedNote();
+  const action = redoStack.pop();
+  if (!note || !action) {
+    return;
+  }
+
+  if (redoAction(note, action)) {
+    undoStack.push(action);
+    completeHistoryMutation(note, action.pageId);
+  } else {
+    render();
+  }
+}
+
+function pushUndoAction(action) {
+  undoStack.push(action);
+  redoStack = [];
+}
+
+function completeHistoryMutation(note, preferredPageId) {
+  normalizeAutoPages(note, preferredPageId);
+  note.updatedAt = new Date().toISOString();
+  notes = sortNotes(notes);
+  persistSoon();
+  render();
+}
+
+function undoAction(note, action) {
+  if (action.type === "add-stroke") {
+    const page = getHistoryPage(note, action);
+    if (!page) {
+      return false;
+    }
+
+    const strokeIndex = findStrokeIndex(page, action.stroke);
+    if (strokeIndex === -1) {
+      return false;
+    }
+
+    page.strokes.splice(strokeIndex, 1);
+    return true;
+  }
+
+  if (action.type === "delete-strokes") {
+    const page = getHistoryPage(note, action, true);
+    if (!page) {
+      return false;
+    }
+
+    restoreDeletedStrokes(page, action.deleted);
+    return true;
+  }
+
+  return false;
+}
+
+function redoAction(note, action) {
+  if (action.type === "add-stroke") {
+    const page = getHistoryPage(note, action, true);
+    if (!page) {
+      return false;
+    }
+
+    note.selectedPageId = page.id;
+    page.strokes.push(action.stroke);
+    return true;
+  }
+
+  if (action.type === "delete-strokes") {
+    const page = getHistoryPage(note, action);
+    if (!page) {
+      return false;
+    }
+
+    note.selectedPageId = page.id;
+    return removeDeletedStrokes(page, action.deleted);
+  }
+
+  return false;
+}
+
+function getHistoryPage(note, action, createIfMissing = false) {
+  let page = getPageById(note, action.pageId);
+  if (page || !createIfMissing) {
+    return page;
+  }
+
+  page = { id: action.pageId, strokes: [] };
+  const pageIndex = Number.isInteger(action.pageIndex)
+    ? clamp(action.pageIndex, 0, note.pages.length)
+    : note.pages.length;
+  note.pages.splice(pageIndex, 0, page);
+
+  return page;
+}
+
+function findStrokeIndex(page, stroke) {
+  const directIndex = page.strokes.lastIndexOf(stroke);
+  if (directIndex !== -1) {
+    return directIndex;
+  }
+
+  const lastIndex = page.strokes.length - 1;
+  return strokesMatch(page.strokes[lastIndex], stroke) ? lastIndex : -1;
+}
+
+function restoreDeletedStrokes(page, deletedStrokes) {
+  const sortedStrokes = [...deletedStrokes].sort((a, b) => a.index - b.index);
+  for (const item of sortedStrokes) {
+    page.strokes.splice(clamp(item.index, 0, page.strokes.length), 0, item.stroke);
+  }
+}
+
+function removeDeletedStrokes(page, deletedStrokes) {
+  let removed = false;
+  const sortedStrokes = [...deletedStrokes].sort((a, b) => b.index - a.index);
+
+  for (const item of sortedStrokes) {
+    if (page.strokes[item.index] === item.stroke || strokesMatch(page.strokes[item.index], item.stroke)) {
+      page.strokes.splice(item.index, 1);
+      removed = true;
+      continue;
+    }
+
+    const strokeIndex = findStrokeIndex(page, item.stroke);
+    if (strokeIndex !== -1) {
+      page.strokes.splice(strokeIndex, 1);
+      removed = true;
+    }
+  }
+
+  return removed;
+}
+
+function strokesMatch(left, right) {
+  if (!left || !right) {
+    return false;
+  }
+
+  return left.tool === right.tool
+    && left.color === right.color
+    && left.width === right.width
+    && JSON.stringify(left.points) === JSON.stringify(right.points);
 }
 
 function setCanvasZoom(value) {
@@ -657,7 +821,7 @@ function deleteNote(noteId) {
 
   currentView = "list";
   currentStroke = null;
-  redoStack = [];
+  clearHistory();
   persistSoon();
   render();
   elements.searchInput.focus();
@@ -739,7 +903,7 @@ function deleteCurrentPage() {
   normalizeAutoPages(note, note.selectedPageId);
   note.updatedAt = new Date().toISOString();
   currentStroke = null;
-  redoStack = [];
+  clearHistory();
   persistSoon();
   render();
   focusSelectedPage();
@@ -762,7 +926,19 @@ function startStroke(event) {
   canvas.setPointerCapture(event.pointerId);
 
   const point = getCanvasPoint(event, canvas);
+  if (activeTool === "stroke-eraser") {
+    currentStroke = {
+      type: "stroke-eraser",
+      pageId: page.id,
+      canvas,
+      deleted: []
+    };
+    eraseStrokesAtPoint(page, point, canvas, currentStroke.deleted);
+    return;
+  }
+
   currentStroke = {
+    type: "draw",
     pageId: page.id,
     canvas,
     stroke: {
@@ -782,6 +958,16 @@ function continueStroke(event) {
   }
 
   event.preventDefault();
+
+  if (currentStroke.type === "stroke-eraser") {
+    const note = getSelectedNote();
+    const page = getPageById(note, currentStroke.pageId);
+    if (page) {
+      eraseStrokesAtPoint(page, getCanvasPoint(event, currentStroke.canvas), currentStroke.canvas, currentStroke.deleted);
+    }
+    return;
+  }
+
   const point = getCanvasPoint(event, currentStroke.canvas);
   const lastPoint = currentStroke.stroke.points[currentStroke.stroke.points.length - 1];
   const distance = Math.hypot(point.x - lastPoint.x, point.y - lastPoint.y);
@@ -798,38 +984,174 @@ function finishStroke(event) {
   }
 
   event.preventDefault();
+  const strokeAction = currentStroke;
 
   const note = getSelectedNote();
-  const page = getPageById(note, currentStroke.pageId);
-  if (note && page) {
-    page.strokes.push(currentStroke.stroke);
-    normalizeAutoPages(note, page.id);
-    note.updatedAt = new Date().toISOString();
-    notes = sortNotes(notes);
-    redoStack = [];
-    persistSoon();
-  }
+  const page = getPageById(note, strokeAction.pageId);
 
-  if (currentStroke.canvas.hasPointerCapture(event.pointerId)) {
-    currentStroke.canvas.releasePointerCapture(event.pointerId);
+  if (strokeAction.canvas.hasPointerCapture(event.pointerId)) {
+    strokeAction.canvas.releasePointerCapture(event.pointerId);
   }
 
   currentStroke = null;
+
+  if (strokeAction.type === "stroke-eraser") {
+    finishStrokeErase(strokeAction);
+    return;
+  }
+
+  if (note && page) {
+    const pageIndex = note.pages.findIndex((item) => item.id === page.id);
+    page.strokes.push(strokeAction.stroke);
+    normalizeAutoPages(note, page.id);
+    note.updatedAt = new Date().toISOString();
+    notes = sortNotes(notes);
+    pushUndoAction({
+      type: "add-stroke",
+      pageId: page.id,
+      pageIndex,
+      stroke: strokeAction.stroke
+    });
+    persistSoon();
+  }
+
   render();
 }
 
 function cancelStroke(event) {
-  const canvas = currentStroke?.canvas;
-  const pageId = currentStroke?.pageId;
+  const strokeAction = currentStroke;
+  const canvas = strokeAction?.canvas;
+  const pageId = strokeAction?.pageId;
 
   if (canvas?.hasPointerCapture(event.pointerId)) {
     canvas.releasePointerCapture(event.pointerId);
   }
 
   currentStroke = null;
+  if (strokeAction?.type === "stroke-eraser") {
+    finishStrokeErase(strokeAction);
+    return;
+  }
+
   if (pageId) {
     redrawPage(pageId);
   }
+}
+
+function finishStrokeErase(strokeAction) {
+  const note = getSelectedNote();
+  const page = getPageById(note, strokeAction.pageId);
+  if (!note || !page || strokeAction.deleted.length === 0) {
+    render();
+    return;
+  }
+
+  const pageIndex = note.pages.findIndex((item) => item.id === page.id);
+  strokeAction.deleted.sort((a, b) => a.index - b.index);
+  normalizeAutoPages(note, page.id);
+  note.updatedAt = new Date().toISOString();
+  notes = sortNotes(notes);
+  pushUndoAction({
+    type: "delete-strokes",
+    pageId: page.id,
+    pageIndex,
+    deleted: strokeAction.deleted
+  });
+  persistSoon();
+  render();
+}
+
+function eraseStrokesAtPoint(page, point, canvas, deletedStrokes) {
+  const hitRadius = getStrokeEraserRadius(canvas);
+  let erased = false;
+
+  for (let index = page.strokes.length - 1; index >= 0; index -= 1) {
+    const stroke = page.strokes[index];
+    if (stroke.tool !== "pen" || !strokeHitsPoint(stroke, point, hitRadius)) {
+      continue;
+    }
+
+    deletedStrokes.push({
+      index: getOriginalStrokeIndex(index, deletedStrokes),
+      stroke
+    });
+    page.strokes.splice(index, 1);
+    erased = true;
+  }
+
+  if (erased) {
+    redrawPage(page.id);
+  }
+
+  return erased;
+}
+
+function getOriginalStrokeIndex(currentIndex, deletedStrokes) {
+  let originalIndex = currentIndex;
+  const deletedIndexes = deletedStrokes.map((item) => item.index).sort((a, b) => a - b);
+
+  for (const deletedIndex of deletedIndexes) {
+    if (deletedIndex <= originalIndex) {
+      originalIndex += 1;
+    }
+  }
+
+  return originalIndex;
+}
+
+function getStrokeEraserRadius(canvas) {
+  const rect = canvas.getBoundingClientRect();
+  if (rect.width <= 0) {
+    return fixedStrokeWidth * 6;
+  }
+
+  return (strokeEraserScreenRadius / rect.width) * canvas.width;
+}
+
+function strokeHitsPoint(stroke, point, hitRadius) {
+  const points = stroke.points;
+  const radius = hitRadius + fixedStrokeWidth / 2;
+  const radiusSquared = radius * radius;
+
+  if (points.length === 1) {
+    return distanceSquared(points[0], point) <= radiusSquared;
+  }
+
+  for (let index = 1; index < points.length; index += 1) {
+    if (distanceToSegmentSquared(point, points[index - 1], points[index]) <= radiusSquared) {
+      return true;
+    }
+  }
+
+  return false;
+}
+
+function distanceSquared(left, right) {
+  const x = left.x - right.x;
+  const y = left.y - right.y;
+  return x * x + y * y;
+}
+
+function distanceToSegmentSquared(point, start, end) {
+  const segmentX = end.x - start.x;
+  const segmentY = end.y - start.y;
+  const segmentLengthSquared = segmentX * segmentX + segmentY * segmentY;
+
+  if (segmentLengthSquared === 0) {
+    return distanceSquared(point, start);
+  }
+
+  const progress = clamp(
+    ((point.x - start.x) * segmentX + (point.y - start.y) * segmentY) / segmentLengthSquared,
+    0,
+    1
+  );
+  const closest = {
+    x: start.x + progress * segmentX,
+    y: start.y + progress * segmentY
+  };
+
+  return distanceSquared(point, closest);
 }
 
 function getCanvasPoint(event, canvas) {
@@ -866,7 +1188,7 @@ function redrawPage(pageId) {
     drawStroke(stroke, context);
   }
 
-  if (currentStroke?.pageId === pageId) {
+  if (currentStroke?.type === "draw" && currentStroke.pageId === pageId) {
     drawStroke(currentStroke.stroke, context);
   }
 }

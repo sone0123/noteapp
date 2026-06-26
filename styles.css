@@ -430,6 +430,11 @@ button {
     var(--paper-shadow);
 }
 
+.page-stack[data-tool="eraser"] .drawing-canvas,
+.page-stack[data-tool="stroke-eraser"] .drawing-canvas {
+  cursor: cell;
+}
+
 .drawing-canvas[data-background="lined"] {
   background-image: repeating-linear-gradient(
     to bottom,
