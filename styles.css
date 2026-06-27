@@ -316,7 +316,7 @@ button {
   user-select: text;
 }
 
-.editor-page[data-input-mode="stylus"] .title-input {
+.editor-page[data-input-mode="pencil"] .title-input {
   -webkit-touch-callout: none;
   -webkit-user-select: none;
   user-select: none;

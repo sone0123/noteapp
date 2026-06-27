@@ -25,6 +25,7 @@ const elements = {
   penButton: document.querySelector("#penButton"),
   eraserButton: document.querySelector("#eraserButton"),
   strokeEraserButton: document.querySelector("#strokeEraserButton"),
+  pencilModeButton: document.querySelector("#pencilModeButton"),
   deletePageButton: document.querySelector("#deletePageButton"),
   pageState: document.querySelector("#pageState"),
   zoomOutButton: document.querySelector("#zoomOutButton"),
@@ -57,7 +58,7 @@ let redoStack = [];
 let currentView = "list";
 let canvasZoom = 1;
 let visiblePageSelectionFrame = null;
-let stylusModeActive = false;
+let pencilModeActive = true;
 let touchScrollGesture = null;
 
 const minCanvasZoom = 0.5;
@@ -137,6 +138,15 @@ elements.strokeEraserButton.addEventListener("click", () => {
   updateToolButtons();
 });
 
+elements.pencilModeButton.addEventListener("click", () => {
+  pencilModeActive = !pencilModeActive;
+  currentStroke = null;
+  touchScrollGesture = null;
+  clearTextSelection();
+  updateInputMode();
+  updateToolButtons();
+});
+
 elements.deletePageButton.addEventListener("click", deleteCurrentPage);
 
 elements.zoomOutButton.addEventListener("click", () => {
@@ -161,8 +171,8 @@ for (const swatch of elements.swatches) {
 }
 
 elements.searchInput.addEventListener("input", renderList);
-elements.editorView.addEventListener("selectstart", preventEditorSelectionInStylusMode);
-elements.editorView.addEventListener("touchstart", clearEditorSelectionInStylusMode, { passive: true });
+elements.editorView.addEventListener("selectstart", preventEditorSelectionInPencilMode);
+elements.editorView.addEventListener("touchstart", clearEditorSelectionInPencilMode, { passive: true });
 
 elements.titleInput.addEventListener("input", () => {
   const note = getSelectedNote();
@@ -553,9 +563,13 @@ function updateToolButtons() {
   elements.penButton.classList.toggle("active", penActive);
   elements.eraserButton.classList.toggle("active", eraserActive);
   elements.strokeEraserButton.classList.toggle("active", strokeEraserActive);
+  elements.pencilModeButton.classList.toggle("active", pencilModeActive);
   elements.penButton.setAttribute("aria-pressed", String(penActive));
   elements.eraserButton.setAttribute("aria-pressed", String(eraserActive));
   elements.strokeEraserButton.setAttribute("aria-pressed", String(strokeEraserActive));
+  elements.pencilModeButton.setAttribute("aria-pressed", String(pencilModeActive));
+  elements.pencilModeButton.title = pencilModeActive ? "Pencilモード" : "タッチ描画モード";
+  elements.pencilModeButton.setAttribute("aria-label", pencilModeActive ? "Pencilモード" : "タッチ描画モード");
   elements.pageStack.dataset.tool = activeTool;
 }
 
@@ -1148,11 +1162,7 @@ function startStroke(event) {
     return;
   }
 
-  if (event.pointerType === "pen") {
-    activateStylusMode();
-  }
-
-  if (event.pointerType === "touch") {
+  if (event.pointerType === "touch" && pencilModeActive) {
     if (currentStroke || touchScrollGesture) {
       preventIgnoredCanvasInput(event);
       return;
@@ -1311,12 +1321,12 @@ function cancelStroke(event) {
 }
 
 function canUsePointerForDrawing(event) {
-  return event.pointerType !== "touch";
+  return event.pointerType !== "touch" || !pencilModeActive;
 }
 
 function beginTouchScroll(event, canvas) {
   event.preventDefault();
-  clearEditorSelectionInStylusMode();
+  clearEditorSelectionInPencilMode();
   touchScrollGesture = {
     pointerId: event.pointerId,
     canvas,
@@ -1363,7 +1373,7 @@ function isCurrentStrokePointer(event) {
 }
 
 function preventIgnoredCanvasInput(event) {
-  clearEditorSelectionInStylusMode();
+  clearEditorSelectionInPencilMode();
   event.preventDefault();
 }
 
@@ -1371,19 +1381,13 @@ function preventCanvasGestureMenu(event) {
   event.preventDefault();
 }
 
-function activateStylusMode() {
-  if (!stylusModeActive) {
-    stylusModeActive = true;
-    updateInputMode();
-  }
-}
-
 function updateInputMode() {
-  elements.editorView.dataset.inputMode = stylusModeActive ? "stylus" : "default";
+  elements.editorView.dataset.inputMode = pencilModeActive ? "pencil" : "touch";
+  elements.pageStack.dataset.inputMode = pencilModeActive ? "pencil" : "touch";
 }
 
-function preventEditorSelectionInStylusMode(event) {
-  if (!stylusModeActive) {
+function preventEditorSelectionInPencilMode(event) {
+  if (!pencilModeActive) {
     return;
   }
 
@@ -1391,8 +1395,8 @@ function preventEditorSelectionInStylusMode(event) {
   clearTextSelection();
 }
 
-function clearEditorSelectionInStylusMode() {
-  if (stylusModeActive) {
+function clearEditorSelectionInPencilMode() {
+  if (pencilModeActive) {
     clearTextSelection();
   }
 }
