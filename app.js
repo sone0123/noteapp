@@ -25,7 +25,15 @@ const notebookPaperColor = "#fffefa";
 const notebookRuleColor = "rgba(85, 142, 170, 0.36)";
 const notebookDotColor = "rgba(85, 142, 170, 0.28)";
 const fixedStrokeWidth = 2.5;
-const strokeEraserScreenRadius = 9;
+const fountainPenMinScale = 0.42;
+const fountainPenMaxScale = 1.24;
+const fountainPenSpeedReference = 24;
+const fountainPenTaperPoints = 4;
+const fountainPenFallbackPressure = 0.55;
+const lassoPasteOffset = 48;
+const lassoPointSpacing = 3;
+const lassoMinimumPoints = 3;
+const lassoBoundaryHitTolerance = 5;
 const pdfPageSize = { width: 595.28, height: 841.89 };
 const pdfImageQuality = 0.92;
 
@@ -45,6 +53,11 @@ const elements = {
   eraserToolCluster: document.querySelector("#eraserToolCluster"),
   eraserButton: document.querySelector("#eraserButton"),
   eraserModeButton: document.querySelector("#eraserModeButton"),
+  lassoToolCluster: document.querySelector("#lassoToolCluster"),
+  lassoButton: document.querySelector("#lassoButton"),
+  selectionActions: document.querySelector("#selectionActions"),
+  copySelectionButton: document.querySelector("#copySelectionButton"),
+  pasteSelectionButton: document.querySelector("#pasteSelectionButton"),
   pencilModeButton: document.querySelector("#pencilModeButton"),
   deletePageButton: document.querySelector("#deletePageButton"),
   pageState: document.querySelector("#pageState"),
@@ -60,10 +73,10 @@ const elements = {
   canvasShell: document.querySelector(".canvas-shell"),
   pageStack: document.querySelector("#pageStack"),
   saveState: document.querySelector("#saveState"),
-  saveStateIcon: document.querySelector("#saveStateIcon"),
   saveStateTime: document.querySelector("#saveStateTime")
 };
 
+const eraserPreview = document.createElement("div");
 const pageStackResizeObserver = typeof ResizeObserver === "function"
   ? new ResizeObserver(updatePaperPatterns)
   : null;
@@ -78,6 +91,8 @@ let currentStroke = null;
 let activeTool = "pen";
 let activeEraserTool = "eraser";
 let activeColor = "#202124";
+let lassoSelection = null;
+let lassoClipboard = null;
 let undoStack = [];
 let redoStack = [];
 let currentView = "list";
@@ -93,6 +108,8 @@ const minCanvasZoom = 0.5;
 const maxCanvasZoom = 2;
 const canvasZoomStep = 0.25;
 
+eraserPreview.className = "eraser-preview";
+document.body.append(eraserPreview);
 applyIcons();
 initializeApp();
 
@@ -108,6 +125,7 @@ elements.newNoteButton.addEventListener("click", () => {
   notes = [note, ...notes];
   selectedId = note.id;
   currentStroke = null;
+  clearLassoSelection();
   clearHistory();
   currentView = "editor";
   persistSoon();
@@ -119,6 +137,7 @@ elements.installAppButton.addEventListener("click", installAppFromList);
 elements.backToListButton.addEventListener("click", () => {
   currentView = "list";
   currentStroke = null;
+  clearLassoSelection();
   persistNow();
   render();
 });
@@ -139,6 +158,7 @@ elements.clearCanvasButton.addEventListener("click", () => {
   normalizeAutoPages(note);
   note.updatedAt = new Date().toISOString();
   currentStroke = null;
+  clearLassoSelection();
   clearHistory();
   persistSoon();
   render();
@@ -152,19 +172,31 @@ elements.exportPdfButton.addEventListener("click", exportSelectedNoteAsPdf);
 
 elements.penButton.addEventListener("click", () => {
   activeTool = "pen";
+  clearLassoSelection();
   updateToolButtons();
 });
 
 elements.eraserButton.addEventListener("click", () => {
   activeTool = activeEraserTool;
+  clearLassoSelection();
   updateToolButtons();
 });
 
 elements.eraserModeButton.addEventListener("click", () => {
   activeEraserTool = activeEraserTool === "eraser" ? "stroke-eraser" : "eraser";
   activeTool = activeEraserTool;
+  clearLassoSelection();
   updateToolButtons();
 });
+
+elements.lassoButton.addEventListener("click", () => {
+  activeTool = "lasso";
+  updateToolButtons();
+});
+
+elements.copySelectionButton.addEventListener("click", copyLassoSelection);
+
+elements.pasteSelectionButton.addEventListener("click", pasteLassoSelection);
 
 elements.pencilModeButton.addEventListener("click", () => {
   pencilModeActive = !pencilModeActive;
@@ -193,6 +225,7 @@ for (const swatch of elements.swatches) {
   swatch.addEventListener("click", () => {
     activeColor = swatch.dataset.color;
     activeTool = "pen";
+    clearLassoSelection();
     updateToolButtons();
     updateSwatches();
   });
@@ -215,6 +248,7 @@ elements.titleInput.addEventListener("input", () => {
 });
 
 window.addEventListener("beforeunload", persistNow);
+window.addEventListener("keydown", handleEditorKeyboardShortcuts);
 window.addEventListener("beforeinstallprompt", (event) => {
   event.preventDefault();
   deferredInstallPrompt = event;
@@ -242,14 +276,16 @@ function applyIcons() {
     [elements.backToListButton, "arrowLeft"],
     [elements.penButton, "pen"],
     [elements.eraserButton, "eraser"],
+    [elements.lassoButton, "lasso"],
+    [elements.copySelectionButton, "copy"],
+    [elements.pasteSelectionButton, "clipboardPaste"],
     [elements.deletePageButton, "fileX"],
     [elements.zoomOutButton, "zoomOut"],
     [elements.zoomInButton, "zoomIn"],
     [elements.undoButton, "undo"],
     [elements.redoButton, "redo"],
     [elements.exportPdfButton, "fileDown"],
-    [elements.clearCanvasButton, "trash"],
-    [elements.saveStateIcon, "clock"]
+    [elements.clearCanvasButton, "trash"]
   ];
 
   for (const [button, iconName] of iconTargets) {
@@ -303,9 +339,18 @@ function getLucideIconPaths(iconName) {
     strokeEraser: `
       <path d="M7 3.5c5-2 7 2.5 3 4C1.5 10 2 15 5 16c5 2 9-10 14-7s.5 13.5-4 12c-5-2.5.5-11 6-2"></path>
     `,
-    clock: `
-      <circle cx="12" cy="12" r="10"></circle>
-      <polyline points="12 6 12 12 16 14"></polyline>
+    lasso: `
+      <path d="M7 22a5 5 0 0 1-2-4"></path>
+      <path d="M3.3 14A6.8 6.8 0 0 1 2 10c0-4.4 4.5-8 10-8s10 3.6 10 8-4.5 8-10 8a12 12 0 0 1-5-1"></path>
+      <circle cx="7" cy="18" r="2"></circle>
+    `,
+    copy: `
+      <rect width="14" height="14" x="8" y="8" rx="2"></rect>
+      <path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2"></path>
+    `,
+    clipboardPaste: `
+      <path d="M15 2H9a2 2 0 0 0-2 2v2h10V4a2 2 0 0 0-2-2Z"></path>
+      <path d="M8 4H6a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V6a2 2 0 0 0-2-2h-2"></path>
     `,
     pencilMode: `
       <path d="M10 3H8"></path>
@@ -945,6 +990,7 @@ function updateToolButtons() {
   const penActive = activeTool === "pen";
   const eraserActive = activeTool === "eraser";
   const strokeEraserActive = activeTool === "stroke-eraser";
+  const lassoActive = activeTool === "lasso";
   const eraserGroupActive = eraserActive || strokeEraserActive;
   const eraserLabel = activeEraserTool === "stroke-eraser"
     ? "ストローク消しゴム"
@@ -955,12 +1001,15 @@ function updateToolButtons() {
 
   elements.penButton.classList.toggle("active", penActive);
   elements.eraserButton.classList.toggle("active", eraserGroupActive);
+  elements.lassoButton.classList.toggle("active", lassoActive);
   elements.penToolCluster.classList.toggle("open", penActive);
   elements.eraserToolCluster.classList.toggle("open", eraserGroupActive);
+  elements.lassoToolCluster.classList.toggle("open", lassoActive);
   elements.pencilModeButton.classList.remove("active");
   elements.eraserModeButton.classList.remove("active");
   elements.penButton.setAttribute("aria-pressed", String(penActive));
   elements.eraserButton.setAttribute("aria-pressed", String(eraserGroupActive));
+  elements.lassoButton.setAttribute("aria-pressed", String(lassoActive));
   elements.eraserModeButton.setAttribute("aria-pressed", "false");
   elements.pencilModeButton.setAttribute("aria-pressed", String(pencilModeActive));
   elements.eraserButton.title = eraserLabel;
@@ -971,9 +1020,20 @@ function updateToolButtons() {
   elements.pencilModeButton.setAttribute("aria-label", pencilModeActive ? "Pencilモード" : "タッチ描画モード");
   elements.colorSwatches.hidden = !penActive;
   elements.eraserModeButton.hidden = !eraserGroupActive;
+  updateSelectionControls(lassoActive);
   updateEraserModeIcon();
   updatePencilModeIcon();
   elements.pageStack.dataset.tool = activeTool;
+}
+
+function updateSelectionControls(lassoActive = activeTool === "lasso") {
+  const hasSelection = Boolean(lassoSelection);
+  const hasClipboard = Boolean(lassoClipboard?.strokes.length);
+  const enabled = lassoActive && currentView === "editor" && Boolean(getSelectedNote());
+
+  elements.selectionActions.hidden = !lassoActive;
+  elements.copySelectionButton.disabled = !enabled || !hasSelection;
+  elements.pasteSelectionButton.disabled = !enabled || !hasClipboard;
 }
 
 function updateSwatches() {
@@ -1072,6 +1132,7 @@ function pushUndoAction(action) {
 }
 
 function completeHistoryMutation(note, preferredPageId) {
+  clearLassoSelection(false);
   normalizeAutoPages(note, preferredPageId);
   note.updatedAt = new Date().toISOString();
   notes = sortNotes(notes);
@@ -1105,6 +1166,26 @@ function undoAction(note, action) {
     return true;
   }
 
+  if (action.type === "move-strokes") {
+    const page = getHistoryPage(note, action);
+    if (!page) {
+      return false;
+    }
+
+    note.selectedPageId = page.id;
+    return undoMovedStrokes(page, action.items);
+  }
+
+  if (action.type === "paste-strokes") {
+    const page = getHistoryPage(note, action);
+    if (!page) {
+      return false;
+    }
+
+    note.selectedPageId = page.id;
+    return removeDeletedStrokes(page, action.inserted);
+  }
+
   return false;
 }
 
@@ -1116,7 +1197,7 @@ function redoAction(note, action) {
     }
 
     note.selectedPageId = page.id;
-    page.strokes.push(action.stroke);
+    page.strokes.push(cloneStroke(action.stroke));
     return true;
   }
 
@@ -1128,6 +1209,27 @@ function redoAction(note, action) {
 
     note.selectedPageId = page.id;
     return removeDeletedStrokes(page, action.deleted);
+  }
+
+  if (action.type === "move-strokes") {
+    const page = getHistoryPage(note, action, true);
+    if (!page) {
+      return false;
+    }
+
+    note.selectedPageId = page.id;
+    return redoMovedStrokes(page, action.items);
+  }
+
+  if (action.type === "paste-strokes") {
+    const page = getHistoryPage(note, action, true);
+    if (!page) {
+      return false;
+    }
+
+    note.selectedPageId = page.id;
+    restoreDeletedStrokes(page, action.inserted);
+    return true;
   }
 
   return false;
@@ -1154,14 +1256,19 @@ function findStrokeIndex(page, stroke) {
     return directIndex;
   }
 
-  const lastIndex = page.strokes.length - 1;
-  return strokesMatch(page.strokes[lastIndex], stroke) ? lastIndex : -1;
+  for (let index = page.strokes.length - 1; index >= 0; index -= 1) {
+    if (strokesMatch(page.strokes[index], stroke)) {
+      return index;
+    }
+  }
+
+  return -1;
 }
 
 function restoreDeletedStrokes(page, deletedStrokes) {
   const sortedStrokes = [...deletedStrokes].sort((a, b) => a.index - b.index);
   for (const item of sortedStrokes) {
-    page.strokes.splice(clamp(item.index, 0, page.strokes.length), 0, item.stroke);
+    page.strokes.splice(clamp(item.index, 0, page.strokes.length), 0, cloneStroke(item.stroke));
   }
 }
 
@@ -1177,6 +1284,83 @@ function removeDeletedStrokes(page, deletedStrokes) {
     }
 
     const strokeIndex = findStrokeIndex(page, item.stroke);
+    if (strokeIndex !== -1) {
+      page.strokes.splice(strokeIndex, 1);
+      removed = true;
+    }
+  }
+
+  return removed;
+}
+
+function moveSelectedStrokesToFront(page, movedStrokes) {
+  const sortedStrokes = [...movedStrokes].sort((a, b) => a.index - b.index);
+  const actionItems = sortedStrokes.map((item) => ({
+    index: item.index,
+    before: cloneStroke(item.before),
+    after: cloneStroke(item.after),
+    finalIndex: 0
+  }));
+
+  for (const item of [...sortedStrokes].sort((a, b) => b.index - a.index)) {
+    page.strokes.splice(item.index, 1);
+  }
+
+  const insertionIndex = page.strokes.length;
+  const frontStrokes = actionItems.map((item, offset) => {
+    item.finalIndex = insertionIndex + offset;
+    return cloneStroke(item.after);
+  });
+
+  page.strokes.push(...frontStrokes);
+
+  return {
+    items: actionItems,
+    indexes: actionItems.map((item) => item.finalIndex)
+  };
+}
+
+function undoMovedStrokes(page, movedStrokes) {
+  const removed = removeMovedFrontStrokes(page, movedStrokes);
+  restoreDeletedStrokes(page, movedStrokes.map((item) => ({
+    index: item.index,
+    stroke: cloneStroke(item.before)
+  })));
+
+  return removed || movedStrokes.length > 0;
+}
+
+function redoMovedStrokes(page, movedStrokes) {
+  const removed = removeDeletedStrokes(page, movedStrokes.map((item) => ({
+    index: item.index,
+    stroke: item.before
+  })));
+  if (!removed) {
+    return false;
+  }
+
+  const insertionIndex = page.strokes.length;
+  const frontStrokes = movedStrokes.map((item, offset) => {
+    item.finalIndex = insertionIndex + offset;
+    return cloneStroke(item.after);
+  });
+  page.strokes.push(...frontStrokes);
+
+  return true;
+}
+
+function removeMovedFrontStrokes(page, movedStrokes) {
+  let removed = false;
+  const sortedStrokes = [...movedStrokes].sort((a, b) => b.finalIndex - a.finalIndex);
+
+  for (const item of sortedStrokes) {
+    let strokeIndex = -1;
+    if (Number.isInteger(item.finalIndex) && strokesMatch(page.strokes[item.finalIndex], item.after)) {
+      strokeIndex = item.finalIndex;
+    } else {
+      strokeIndex = findStrokeIndex(page, item.after);
+    }
+
     if (strokeIndex !== -1) {
       page.strokes.splice(strokeIndex, 1);
       removed = true;
@@ -1491,6 +1675,7 @@ function deleteNote(noteId) {
 
   currentView = "list";
   currentStroke = null;
+  clearLassoSelection(false);
   clearHistory();
   persistSoon();
   render();
@@ -1572,6 +1757,7 @@ function deleteCurrentPage() {
   normalizeAutoPages(note, note.selectedPageId);
   note.updatedAt = new Date().toISOString();
   currentStroke = null;
+  clearLassoSelection(false);
   clearHistory();
   persistSoon();
   render();
@@ -1612,6 +1798,12 @@ function startStroke(event) {
   canvas.setPointerCapture(event.pointerId);
 
   const point = getCanvasPoint(event, canvas);
+  if (activeTool === "lasso") {
+    startLassoAction(page, canvas, event.pointerId, point);
+    redrawPage(page.id);
+    return;
+  }
+
   if (activeTool === "stroke-eraser") {
     currentStroke = {
       type: "stroke-eraser",
@@ -1620,6 +1812,7 @@ function startStroke(event) {
       pointerId: event.pointerId,
       deleted: []
     };
+    updateEraserPreview(event, canvas, activeTool);
     eraseStrokesAtPoint(page, point, canvas, currentStroke.deleted);
     return;
   }
@@ -1637,6 +1830,9 @@ function startStroke(event) {
     }
   };
 
+  if (activeTool === "eraser") {
+    updateEraserPreview(event, canvas, activeTool);
+  }
   redrawPage(page.id);
 }
 
@@ -1653,10 +1849,21 @@ function continueStroke(event) {
 
   event.preventDefault();
 
+  if (currentStroke.type === "lasso") {
+    continueLassoAction(event);
+    return;
+  }
+
+  if (currentStroke.type === "move-selection") {
+    continueSelectionMove(event);
+    return;
+  }
+
   if (currentStroke.type === "stroke-eraser") {
     const note = getSelectedNote();
     const page = getPageById(note, currentStroke.pageId);
     if (page) {
+      updateEraserPreview(event, currentStroke.canvas, currentStroke.type);
       eraseStrokesAtPoint(page, getCanvasPoint(event, currentStroke.canvas), currentStroke.canvas, currentStroke.deleted);
     }
     return;
@@ -1665,6 +1872,9 @@ function continueStroke(event) {
   const point = getCanvasPoint(event, currentStroke.canvas);
   const lastPoint = currentStroke.stroke.points[currentStroke.stroke.points.length - 1];
   const distance = Math.hypot(point.x - lastPoint.x, point.y - lastPoint.y);
+  if (currentStroke.stroke.tool === "eraser") {
+    updateEraserPreview(event, currentStroke.canvas, currentStroke.stroke.tool);
+  }
 
   if (distance >= 1.5) {
     currentStroke.stroke.points.push(point);
@@ -1693,7 +1903,18 @@ function finishStroke(event) {
     strokeAction.canvas.releasePointerCapture(event.pointerId);
   }
 
+  hideEraserPreview();
   currentStroke = null;
+
+  if (strokeAction.type === "lasso") {
+    finishLassoAction(strokeAction);
+    return;
+  }
+
+  if (strokeAction.type === "move-selection") {
+    finishSelectionMove(strokeAction);
+    return;
+  }
 
   if (strokeAction.type === "stroke-eraser") {
     finishStrokeErase(strokeAction);
@@ -1710,7 +1931,7 @@ function finishStroke(event) {
       type: "add-stroke",
       pageId: page.id,
       pageIndex,
-      stroke: strokeAction.stroke
+      stroke: cloneStroke(strokeAction.stroke)
     });
     persistSoon();
   }
@@ -1737,7 +1958,19 @@ function cancelStroke(event) {
     canvas.releasePointerCapture(event.pointerId);
   }
 
+  hideEraserPreview();
   currentStroke = null;
+  if (strokeAction?.type === "lasso") {
+    redrawPage(pageId);
+    updateSelectionControls();
+    return;
+  }
+
+  if (strokeAction?.type === "move-selection") {
+    cancelSelectionMove(strokeAction);
+    return;
+  }
+
   if (strokeAction?.type === "stroke-eraser") {
     finishStrokeErase(strokeAction);
     return;
@@ -1746,6 +1979,559 @@ function cancelStroke(event) {
   if (pageId) {
     redrawPage(pageId);
   }
+}
+
+function startLassoAction(page, canvas, pointerId, point) {
+  if (lassoSelection?.pageId === page.id && selectionMoveHitTest(lassoSelection, point, canvas)) {
+    const items = getSelectionItems(page, lassoSelection);
+    if (items.length > 0) {
+      currentStroke = {
+        type: "move-selection",
+        pageId: page.id,
+        canvas,
+        pointerId,
+        lastPoint: point,
+        totalDelta: { x: 0, y: 0 },
+        selectionBefore: cloneLassoSelection(lassoSelection),
+        items: items.map((item) => ({
+          index: item.index,
+          before: cloneStroke(item.stroke)
+        }))
+      };
+      return;
+    }
+  }
+
+  clearLassoSelection();
+  currentStroke = {
+    type: "lasso",
+    pageId: page.id,
+    canvas,
+    pointerId,
+    points: [point]
+  };
+}
+
+function continueLassoAction(event) {
+  const point = getCanvasPoint(event, currentStroke.canvas);
+  const lastPoint = currentStroke.points[currentStroke.points.length - 1];
+  if (distanceSquared(point, lastPoint) < lassoPointSpacing * lassoPointSpacing) {
+    return;
+  }
+
+  currentStroke.points.push(point);
+  redrawPage(currentStroke.pageId);
+}
+
+function finishLassoAction(strokeAction) {
+  const note = getSelectedNote();
+  const page = getPageById(note, strokeAction.pageId);
+  if (!page || strokeAction.points.length < lassoMinimumPoints) {
+    clearLassoSelection();
+    redrawPage(strokeAction.pageId);
+    return;
+  }
+
+  const selection = createLassoSelection(page, strokeAction.points);
+  lassoSelection = selection;
+  redrawPage(page.id);
+  updateSelectionControls();
+}
+
+function continueSelectionMove(event) {
+  const note = getSelectedNote();
+  const page = getPageById(note, currentStroke.pageId);
+  if (!page || !lassoSelection) {
+    return;
+  }
+
+  const point = getCanvasPoint(event, currentStroke.canvas);
+  const requestedDelta = {
+    x: point.x - currentStroke.lastPoint.x,
+    y: point.y - currentStroke.lastPoint.y
+  };
+  const delta = getClampedSelectionDelta(lassoSelection.bounds, requestedDelta.x, requestedDelta.y);
+  currentStroke.lastPoint = point;
+
+  if (delta.x === 0 && delta.y === 0) {
+    return;
+  }
+
+  for (const item of currentStroke.items) {
+    const stroke = page.strokes[item.index];
+    if (stroke) {
+      translateStroke(stroke, delta.x, delta.y);
+    }
+  }
+
+  translateLassoSelection(lassoSelection, delta.x, delta.y);
+  currentStroke.totalDelta.x += delta.x;
+  currentStroke.totalDelta.y += delta.y;
+  redrawPage(page.id);
+}
+
+function finishSelectionMove(strokeAction) {
+  const note = getSelectedNote();
+  const page = getPageById(note, strokeAction.pageId);
+  if (!note || !page) {
+    render();
+    return;
+  }
+
+  const moved = Math.abs(strokeAction.totalDelta.x) > 0.01 || Math.abs(strokeAction.totalDelta.y) > 0.01;
+  if (!moved) {
+    redrawPage(page.id);
+    updateSelectionControls();
+    return;
+  }
+
+  const items = strokeAction.items
+    .map((item) => ({
+      index: item.index,
+      before: item.before,
+      after: cloneStroke(page.strokes[item.index])
+    }))
+    .filter((item) => item.after && !strokesMatch(item.before, item.after));
+
+  if (items.length === 0) {
+    redrawPage(page.id);
+    updateSelectionControls();
+    return;
+  }
+
+  const pageIndex = note.pages.findIndex((item) => item.id === page.id);
+  const moveResult = moveSelectedStrokesToFront(page, items);
+  if (lassoSelection) {
+    lassoSelection.strokeIndexes = moveResult.indexes;
+  }
+
+  normalizeAutoPages(note, page.id);
+  note.updatedAt = new Date().toISOString();
+  notes = sortNotes(notes);
+  pushUndoAction({
+    type: "move-strokes",
+    pageId: page.id,
+    pageIndex,
+    items: moveResult.items
+  });
+  persistSoon();
+  render();
+}
+
+function cancelSelectionMove(strokeAction) {
+  const note = getSelectedNote();
+  const page = getPageById(note, strokeAction.pageId);
+  if (page) {
+    for (const item of strokeAction.items) {
+      if (page.strokes[item.index]) {
+        page.strokes[item.index] = cloneStroke(item.before);
+      }
+    }
+  }
+
+  lassoSelection = cloneLassoSelection(strokeAction.selectionBefore);
+  redrawPage(strokeAction.pageId);
+  updateSelectionControls();
+}
+
+function copyLassoSelection() {
+  const note = getSelectedNote();
+  const page = getPageById(note, lassoSelection?.pageId);
+  if (!page || !lassoSelection) {
+    return;
+  }
+
+  const items = getSelectionItems(page, lassoSelection);
+  if (items.length === 0) {
+    clearLassoSelection();
+    return;
+  }
+
+  lassoClipboard = {
+    strokes: items.map((item) => cloneStroke(item.stroke)),
+    bounds: getStrokesBounds(items.map((item) => item.stroke)),
+    pasteCount: 0
+  };
+  updateSelectionControls();
+}
+
+function pasteLassoSelection() {
+  const note = getSelectedNote();
+  const page = getSelectedPage(note);
+  if (activeTool !== "lasso" || !note || !page || !lassoClipboard?.strokes.length) {
+    return;
+  }
+
+  const pasteCount = lassoClipboard.pasteCount + 1;
+  const requestedOffset = lassoPasteOffset * pasteCount;
+  const delta = getClampedSelectionDelta(lassoClipboard.bounds, requestedOffset, requestedOffset);
+  const pastedStrokes = lassoClipboard.strokes.map((stroke) => {
+    const copy = cloneStroke(stroke);
+    translateStroke(copy, delta.x, delta.y);
+    return copy;
+  });
+  const insertionIndex = page.strokes.length;
+  const inserted = pastedStrokes.map((stroke, offset) => ({
+    index: insertionIndex + offset,
+    stroke
+  }));
+  const insertedAction = inserted.map((item) => ({
+    index: item.index,
+    stroke: cloneStroke(item.stroke)
+  }));
+
+  page.strokes.push(...pastedStrokes);
+  lassoClipboard.pasteCount = pasteCount;
+  lassoSelection = createSelectionFromItems(page.id, inserted.map((item) => ({
+    index: item.index,
+    stroke: item.stroke
+  })));
+
+  const pageIndex = note.pages.findIndex((item) => item.id === page.id);
+  normalizeAutoPages(note, page.id);
+  note.updatedAt = new Date().toISOString();
+  notes = sortNotes(notes);
+  pushUndoAction({
+    type: "paste-strokes",
+    pageId: page.id,
+    pageIndex,
+    inserted: insertedAction
+  });
+  persistSoon();
+  render();
+}
+
+function clearLassoSelection(redraw = true) {
+  const pageId = lassoSelection?.pageId;
+  lassoSelection = null;
+  if (redraw && pageId) {
+    redrawPage(pageId);
+  }
+
+  updateSelectionControls();
+}
+
+function selectionMoveHitTest(selection, point, canvas) {
+  return pointInPolygon(point, selection.polygon)
+    || pointNearClosedPolygon(
+      point,
+      selection.polygon,
+      getScreenLengthAsCanvasPixels(canvas, lassoBoundaryHitTolerance)
+    );
+}
+
+function createLassoSelection(page, polygon) {
+  const items = getStrokesInPolygon(page, polygon);
+  if (items.length === 0) {
+    return null;
+  }
+
+  return createSelectionFromItems(page.id, items, polygon);
+}
+
+function createSelectionFromItems(pageId, items, polygon = null) {
+  const bounds = getStrokesBounds(items.map((item) => item.stroke));
+  if (!bounds) {
+    return null;
+  }
+
+  return {
+    pageId,
+    strokeIndexes: items.map((item) => item.index),
+    polygon: polygon ? polygon.map(clonePoint) : getBoundsPolygon(bounds),
+    bounds
+  };
+}
+
+function getSelectionItems(page, selection) {
+  if (!page || !selection) {
+    return [];
+  }
+
+  return selection.strokeIndexes
+    .map((index) => ({ index, stroke: page.strokes[index] }))
+    .filter((item) => item.stroke?.tool === "pen");
+}
+
+function getStrokesInPolygon(page, polygon) {
+  const polygonBounds = getPointsBounds(polygon);
+  if (!polygonBounds) {
+    return [];
+  }
+
+  return page.strokes
+    .map((stroke, index) => ({ index, stroke }))
+    .filter((item) => item.stroke.tool === "pen")
+    .filter((item) => strokeIntersectsPolygon(item.stroke, polygon, polygonBounds));
+}
+
+function strokeIntersectsPolygon(stroke, polygon, polygonBounds) {
+  const strokeBounds = getStrokeBounds(stroke);
+  if (!strokeBounds || !boundsOverlap(strokeBounds, polygonBounds)) {
+    return false;
+  }
+
+  if (stroke.points.some((point) => pointInPolygon(point, polygon))) {
+    return true;
+  }
+
+  for (let pointIndex = 1; pointIndex < stroke.points.length; pointIndex += 1) {
+    const start = stroke.points[pointIndex - 1];
+    const end = stroke.points[pointIndex];
+    for (let polygonIndex = 0; polygonIndex < polygon.length; polygonIndex += 1) {
+      const edgeStart = polygon[polygonIndex];
+      const edgeEnd = polygon[(polygonIndex + 1) % polygon.length];
+      if (segmentsIntersect(start, end, edgeStart, edgeEnd)) {
+        return true;
+      }
+    }
+  }
+
+  return false;
+}
+
+function getStrokesBounds(strokes) {
+  const bounds = strokes
+    .map(getStrokeBounds)
+    .filter(Boolean)
+    .reduce((merged, item) => mergeBounds(merged, item), null);
+
+  return bounds;
+}
+
+function getStrokeBounds(stroke) {
+  if (!stroke?.points.length) {
+    return null;
+  }
+
+  const padding = stroke.tool === "eraser" ? getNormalEraserCanvasRadius() : getPenStrokeCanvasRadius(stroke);
+  return getPointsBounds(stroke.points, padding);
+}
+
+function getPointsBounds(points, padding = 0) {
+  if (!points.length) {
+    return null;
+  }
+
+  let left = points[0].x;
+  let right = points[0].x;
+  let top = points[0].y;
+  let bottom = points[0].y;
+
+  for (const point of points) {
+    left = Math.min(left, point.x);
+    right = Math.max(right, point.x);
+    top = Math.min(top, point.y);
+    bottom = Math.max(bottom, point.y);
+  }
+
+  return {
+    left: left - padding,
+    right: right + padding,
+    top: top - padding,
+    bottom: bottom + padding
+  };
+}
+
+function mergeBounds(left, right) {
+  if (!left) {
+    return { ...right };
+  }
+
+  return {
+    left: Math.min(left.left, right.left),
+    right: Math.max(left.right, right.right),
+    top: Math.min(left.top, right.top),
+    bottom: Math.max(left.bottom, right.bottom)
+  };
+}
+
+function boundsOverlap(left, right) {
+  return left.left <= right.right
+    && left.right >= right.left
+    && left.top <= right.bottom
+    && left.bottom >= right.top;
+}
+
+function pointInBounds(point, bounds) {
+  return Boolean(
+    bounds
+    && point.x >= bounds.left
+    && point.x <= bounds.right
+    && point.y >= bounds.top
+    && point.y <= bounds.bottom
+  );
+}
+
+function pointInPolygon(point, polygon) {
+  let inside = false;
+  for (let index = 0, previousIndex = polygon.length - 1; index < polygon.length; previousIndex = index, index += 1) {
+    const current = polygon[index];
+    const previous = polygon[previousIndex];
+    const intersects = ((current.y > point.y) !== (previous.y > point.y))
+      && point.x < ((previous.x - current.x) * (point.y - current.y)) / (previous.y - current.y) + current.x;
+    if (intersects) {
+      inside = !inside;
+    }
+  }
+
+  return inside;
+}
+
+function pointNearClosedPolygon(point, polygon, tolerance) {
+  if (polygon.length < 2) {
+    return false;
+  }
+
+  const toleranceSquared = tolerance * tolerance;
+  for (let index = 0; index < polygon.length; index += 1) {
+    const start = polygon[index];
+    const end = polygon[(index + 1) % polygon.length];
+    if (distanceToSegmentSquared(point, start, end) <= toleranceSquared) {
+      return true;
+    }
+  }
+
+  return false;
+}
+
+function segmentsIntersect(a, b, c, d) {
+  const epsilon = 0.0001;
+  const abC = crossProduct(a, b, c);
+  const abD = crossProduct(a, b, d);
+  const cdA = crossProduct(c, d, a);
+  const cdB = crossProduct(c, d, b);
+
+  if (Math.abs(abC) < epsilon && pointOnSegment(c, a, b, epsilon)) {
+    return true;
+  }
+
+  if (Math.abs(abD) < epsilon && pointOnSegment(d, a, b, epsilon)) {
+    return true;
+  }
+
+  if (Math.abs(cdA) < epsilon && pointOnSegment(a, c, d, epsilon)) {
+    return true;
+  }
+
+  if (Math.abs(cdB) < epsilon && pointOnSegment(b, c, d, epsilon)) {
+    return true;
+  }
+
+  return (abC > 0) !== (abD > 0) && (cdA > 0) !== (cdB > 0);
+}
+
+function crossProduct(a, b, c) {
+  return (b.x - a.x) * (c.y - a.y) - (b.y - a.y) * (c.x - a.x);
+}
+
+function pointOnSegment(point, start, end, epsilon = 0) {
+  return point.x >= Math.min(start.x, end.x) - epsilon
+    && point.x <= Math.max(start.x, end.x) + epsilon
+    && point.y >= Math.min(start.y, end.y) - epsilon
+    && point.y <= Math.max(start.y, end.y) + epsilon;
+}
+
+function getClampedSelectionDelta(bounds, deltaX, deltaY) {
+  const size = getPaperSize();
+  return {
+    x: clamp(deltaX, -bounds.left, size.width - bounds.right),
+    y: clamp(deltaY, -bounds.top, size.height - bounds.bottom)
+  };
+}
+
+function translateLassoSelection(selection, deltaX, deltaY) {
+  selection.polygon = selection.polygon.map((point) => translatePoint(point, deltaX, deltaY));
+  selection.bounds = translateBounds(selection.bounds, deltaX, deltaY);
+}
+
+function translateStroke(stroke, deltaX, deltaY) {
+  stroke.points = stroke.points.map((point) => translatePoint(point, deltaX, deltaY));
+}
+
+function translatePoint(point, deltaX, deltaY) {
+  return {
+    ...point,
+    x: point.x + deltaX,
+    y: point.y + deltaY
+  };
+}
+
+function translateBounds(bounds, deltaX, deltaY) {
+  return {
+    left: bounds.left + deltaX,
+    right: bounds.right + deltaX,
+    top: bounds.top + deltaY,
+    bottom: bounds.bottom + deltaY
+  };
+}
+
+function getBoundsPolygon(bounds) {
+  return [
+    { x: bounds.left, y: bounds.top },
+    { x: bounds.right, y: bounds.top },
+    { x: bounds.right, y: bounds.bottom },
+    { x: bounds.left, y: bounds.bottom }
+  ];
+}
+
+function cloneLassoSelection(selection) {
+  if (!selection) {
+    return null;
+  }
+
+  return {
+    pageId: selection.pageId,
+    strokeIndexes: [...selection.strokeIndexes],
+    polygon: selection.polygon.map(clonePoint),
+    bounds: { ...selection.bounds }
+  };
+}
+
+function cloneStroke(stroke) {
+  return {
+    ...stroke,
+    points: stroke.points.map(clonePoint)
+  };
+}
+
+function clonePoint(point) {
+  const clonedPoint = {
+    x: point.x,
+    y: point.y
+  };
+
+  if (typeof point.pressure === "number") {
+    clonedPoint.pressure = point.pressure;
+  }
+
+  return clonedPoint;
+}
+
+function handleEditorKeyboardShortcuts(event) {
+  if (currentView !== "editor" || activeTool !== "lasso" || isEditableTarget(event.target)) {
+    return;
+  }
+
+  const modifierPressed = event.metaKey || event.ctrlKey;
+  if (!modifierPressed) {
+    return;
+  }
+
+  const key = event.key.toLocaleLowerCase();
+  if (key === "c" && lassoSelection) {
+    event.preventDefault();
+    copyLassoSelection();
+  } else if (key === "v" && lassoClipboard?.strokes.length) {
+    event.preventDefault();
+    pasteLassoSelection();
+  }
+}
+
+function isEditableTarget(target) {
+  return target instanceof HTMLInputElement
+    || target instanceof HTMLTextAreaElement
+    || target?.isContentEditable;
 }
 
 function canUsePointerForDrawing(event) {
@@ -1897,18 +2683,67 @@ function getOriginalStrokeIndex(currentIndex, deletedStrokes) {
   return originalIndex;
 }
 
-function getStrokeEraserRadius(canvas) {
+function getStrokeEraserRadius() {
+  return Math.max(0, getNormalEraserCanvasRadius() - fixedStrokeWidth / 2);
+}
+
+function getCanvasLengthAsScreenPixels(canvas, length) {
   const rect = canvas.getBoundingClientRect();
-  if (rect.width <= 0) {
-    return fixedStrokeWidth * 6;
+  if (rect.width <= 0 || canvas.width <= 0) {
+    return length;
   }
 
-  return (strokeEraserScreenRadius / rect.width) * canvas.width;
+  return (length / canvas.width) * rect.width;
+}
+
+function getScreenLengthAsCanvasPixels(canvas, length) {
+  const rect = canvas.getBoundingClientRect();
+  if (rect.width <= 0 || canvas.width <= 0) {
+    return length;
+  }
+
+  return (length / rect.width) * canvas.width;
+}
+
+function getNormalEraserCanvasRadius() {
+  return (fixedStrokeWidth * 3) / 2;
+}
+
+function getPenStrokeCanvasRadius(stroke) {
+  const baseWidth = typeof stroke?.width === "number" ? stroke.width : fixedStrokeWidth;
+  return (baseWidth * fountainPenMaxScale) / 2;
+}
+
+function getNormalEraserScreenRadius(canvas) {
+  return getCanvasLengthAsScreenPixels(canvas, getNormalEraserCanvasRadius());
+}
+
+function getStrokeEraserPreviewRadius(canvas) {
+  return getNormalEraserScreenRadius(canvas);
+}
+
+function updateEraserPreview(event, canvas, tool) {
+  const radius = tool === "stroke-eraser"
+    ? getStrokeEraserPreviewRadius(canvas)
+    : getNormalEraserScreenRadius(canvas);
+  const visibleRadius = Math.max(2, radius);
+  const size = visibleRadius * 2;
+
+  eraserPreview.classList.toggle("stroke-mode", tool === "stroke-eraser");
+  eraserPreview.style.width = `${size}px`;
+  eraserPreview.style.height = `${size}px`;
+  eraserPreview.style.left = `${event.clientX}px`;
+  eraserPreview.style.top = `${event.clientY}px`;
+  eraserPreview.classList.add("visible");
+}
+
+function hideEraserPreview() {
+  eraserPreview.classList.remove("visible", "stroke-mode");
 }
 
 function strokeHitsPoint(stroke, point, hitRadius) {
   const points = stroke.points;
-  const radius = hitRadius + fixedStrokeWidth / 2;
+  const radius = hitRadius + getPenStrokeCanvasRadius(stroke);
   const radiusSquared = radius * radius;
 
   if (points.length === 1) {
@@ -1957,8 +2792,25 @@ function getCanvasPoint(event, canvas) {
 
   return {
     x: clamp(((event.clientX - rect.left) / rect.width) * canvas.width, 0, canvas.width),
-    y: clamp(((event.clientY - rect.top) / rect.height) * canvas.height, 0, canvas.height)
+    y: clamp(((event.clientY - rect.top) / rect.height) * canvas.height, 0, canvas.height),
+    pressure: getPointerPressure(event)
   };
+}
+
+function getPointerPressure(event) {
+  if (typeof event.pressure !== "number") {
+    return fountainPenFallbackPressure;
+  }
+
+  if (event.pointerType === "pen") {
+    return clamp(event.pressure || 0.1, 0.1, 1);
+  }
+
+  if (event.pressure > 0) {
+    return clamp(event.pressure, 0.2, 1);
+  }
+
+  return fountainPenFallbackPressure;
 }
 
 function clamp(value, min, max) {
@@ -1980,14 +2832,39 @@ function redrawPage(pageId) {
   }
 
   const context = canvas.getContext("2d");
+  const movingStrokeIndexes = currentStroke?.type === "move-selection" && currentStroke.pageId === pageId
+    ? new Set(currentStroke.items.map((item) => item.index))
+    : null;
   context.clearRect(0, 0, canvas.width, canvas.height);
 
-  for (const stroke of page.strokes) {
+  for (let index = 0; index < page.strokes.length; index += 1) {
+    if (movingStrokeIndexes?.has(index)) {
+      continue;
+    }
+
+    const stroke = page.strokes[index];
     drawStroke(stroke, context);
   }
 
   if (currentStroke?.type === "draw" && currentStroke.pageId === pageId) {
     drawStroke(currentStroke.stroke, context);
+  }
+
+  if (currentStroke?.type === "lasso" && currentStroke.pageId === pageId) {
+    drawLassoPath(currentStroke.points, context, false);
+  }
+
+  if (currentStroke?.type === "move-selection" && currentStroke.pageId === pageId) {
+    for (const item of currentStroke.items) {
+      const stroke = page.strokes[item.index];
+      if (stroke) {
+        drawStroke(stroke, context);
+      }
+    }
+  }
+
+  if (lassoSelection?.pageId === pageId) {
+    drawLassoSelection(lassoSelection, context);
   }
 }
 
@@ -2029,8 +2906,20 @@ function drawStroke(stroke, targetContext) {
 
   targetContext.save();
   targetContext.globalCompositeOperation = stroke.tool === "eraser" ? "destination-out" : "source-over";
+
+  if (stroke.tool === "pen") {
+    drawFountainStroke(stroke, targetContext);
+    targetContext.restore();
+    return;
+  }
+
+  drawFixedWidthStroke(stroke, targetContext, fixedStrokeWidth * 3);
+  targetContext.restore();
+}
+
+function drawFixedWidthStroke(stroke, targetContext, lineWidth) {
   targetContext.strokeStyle = stroke.color;
-  targetContext.lineWidth = stroke.tool === "eraser" ? fixedStrokeWidth * 3 : fixedStrokeWidth;
+  targetContext.lineWidth = lineWidth;
   targetContext.lineCap = "round";
   targetContext.lineJoin = "round";
 
@@ -2053,6 +2942,148 @@ function drawStroke(stroke, targetContext) {
         targetContext.lineTo(current.x, current.y);
       }
     }
+  }
+
+  targetContext.stroke();
+}
+
+function drawFountainStroke(stroke, targetContext) {
+  const points = stroke.points;
+  const baseWidth = typeof stroke.width === "number" ? stroke.width : fixedStrokeWidth;
+  const widths = points.map((point, index) => getFountainPointWidth(points, index, baseWidth));
+
+  targetContext.fillStyle = stroke.color;
+  targetContext.globalAlpha = 0.96;
+
+  if (points.length === 1) {
+    drawFountainDot(targetContext, points[0], widths[0]);
+    return;
+  }
+
+  const leftEdge = [];
+  const rightEdge = [];
+
+  for (let index = 0; index < points.length; index += 1) {
+    const point = points[index];
+    const previous = points[index - 1] ?? point;
+    const next = points[index + 1] ?? point;
+    let tangentX = next.x - previous.x;
+    let tangentY = next.y - previous.y;
+    let tangentLength = Math.hypot(tangentX, tangentY);
+
+    if (tangentLength === 0) {
+      tangentX = 1;
+      tangentY = 0;
+      tangentLength = 1;
+    }
+
+    const normalX = -tangentY / tangentLength;
+    const normalY = tangentX / tangentLength;
+    const radius = widths[index] / 2;
+
+    leftEdge.push({
+      x: point.x + normalX * radius,
+      y: point.y + normalY * radius
+    });
+    rightEdge.push({
+      x: point.x - normalX * radius,
+      y: point.y - normalY * radius
+    });
+  }
+
+  targetContext.beginPath();
+  targetContext.moveTo(leftEdge[0].x, leftEdge[0].y);
+  addSmoothOutline(targetContext, leftEdge);
+
+  const reversedRightEdge = [...rightEdge].reverse();
+  targetContext.lineTo(reversedRightEdge[0].x, reversedRightEdge[0].y);
+  addSmoothOutline(targetContext, reversedRightEdge);
+  targetContext.closePath();
+  targetContext.fill();
+}
+
+function drawFountainDot(targetContext, point, width) {
+  targetContext.save();
+  targetContext.translate(point.x, point.y);
+  targetContext.rotate(-Math.PI / 7);
+  targetContext.beginPath();
+  targetContext.ellipse(0, 0, width * 0.52, Math.max(width * 0.28, 0.45), 0, 0, Math.PI * 2);
+  targetContext.fill();
+  targetContext.restore();
+}
+
+function addSmoothOutline(targetContext, points) {
+  if (points.length < 2) {
+    return;
+  }
+
+  for (let index = 0; index < points.length - 1; index += 1) {
+    const current = points[index];
+    const next = points[index + 1];
+    const midX = (current.x + next.x) / 2;
+    const midY = (current.y + next.y) / 2;
+    targetContext.quadraticCurveTo(current.x, current.y, midX, midY);
+  }
+
+  const lastPoint = points[points.length - 1];
+  targetContext.lineTo(lastPoint.x, lastPoint.y);
+}
+
+function getFountainPointWidth(points, index, baseWidth) {
+  const point = points[index];
+  const previous = points[index - 1] ?? point;
+  const next = points[index + 1] ?? point;
+  const travel = (Math.hypot(point.x - previous.x, point.y - previous.y)
+    + Math.hypot(next.x - point.x, next.y - point.y)) / 2;
+  const speedFactor = clamp(travel / fountainPenSpeedReference, 0, 1);
+  const pressure = getStoredPressure(point);
+  const minWidth = baseWidth * fountainPenMinScale;
+  const maxWidth = baseWidth * fountainPenMaxScale;
+  const pressureFactor = 0.32 + pressure * 0.68;
+  let width = minWidth + (maxWidth - minWidth) * pressureFactor;
+
+  width *= 1 - speedFactor * 0.28;
+
+  if (points.length > 2) {
+    const edgeDistance = Math.min(index, points.length - 1 - index);
+    const taper = 0.58 + 0.42 * clamp(edgeDistance / fountainPenTaperPoints, 0, 1);
+    width *= taper;
+  }
+
+  return clamp(width, minWidth, maxWidth);
+}
+
+function getStoredPressure(point) {
+  return typeof point.pressure === "number"
+    ? clamp(point.pressure, 0.1, 1)
+    : fountainPenFallbackPressure;
+}
+
+function drawLassoSelection(selection, targetContext) {
+  drawLassoPath(selection.polygon, targetContext, true);
+}
+
+function drawLassoPath(points, targetContext, closed) {
+  if (points.length < 2) {
+    return;
+  }
+
+  targetContext.save();
+  targetContext.lineWidth = 3;
+  targetContext.lineCap = "round";
+  targetContext.lineJoin = "round";
+  targetContext.strokeStyle = "rgba(47, 111, 115, 0.88)";
+  targetContext.fillStyle = "rgba(47, 111, 115, 0.08)";
+  targetContext.beginPath();
+  targetContext.moveTo(points[0].x, points[0].y);
+
+  for (const point of points.slice(1)) {
+    targetContext.lineTo(point.x, point.y);
+  }
+
+  if (closed) {
+    targetContext.closePath();
+    targetContext.fill();
   }
 
   targetContext.stroke();
@@ -2083,6 +3114,7 @@ function formatDate(value) {
   }
 
   return new Intl.DateTimeFormat("ja-JP", {
+    year: "numeric",
     month: "numeric",
     day: "numeric",
     hour: "2-digit",
