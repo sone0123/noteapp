@@ -419,9 +419,18 @@ button {
 }
 
 .drawing-canvas {
-  --paper-step-x: 28px;
-  --paper-step-y: 28px;
-  --paper-line-color: rgba(47, 111, 115, 0.2);
+  --notebook-rule-step: 28px;
+  --notebook-top-margin: 84px;
+  --notebook-left-margin: 32px;
+  --notebook-right-margin: 32px;
+  --notebook-bottom-margin: 56px;
+  --notebook-dot-step: 28px;
+  --notebook-rule-width: 1px;
+  --notebook-dot-radius: 1px;
+  --notebook-date-line-width: 160px;
+  --notebook-date-line-top: 28px;
+  --notebook-rule-color: rgba(85, 142, 170, 0.36);
+  --notebook-dot-color: rgba(85, 142, 170, 0.28);
   display: block;
   width: 100%;
   height: auto;
@@ -449,9 +458,65 @@ button {
 }
 
 .drawing-canvas[data-background="lined"] {
-  background-image: repeating-linear-gradient(
-    to bottom,
-    transparent 0 calc(var(--paper-step-y) - 1px),
-    var(--paper-line-color) calc(var(--paper-step-y) - 1px) var(--paper-step-y)
-  );
+  background-image:
+    linear-gradient(
+      to right,
+      transparent 0 calc(100% - var(--notebook-right-margin) - var(--notebook-date-line-width)),
+      var(--notebook-rule-color) calc(100% - var(--notebook-right-margin) - var(--notebook-date-line-width)) calc(100% - var(--notebook-right-margin)),
+      transparent calc(100% - var(--notebook-right-margin)) 100%
+    ),
+    linear-gradient(
+      to bottom,
+      var(--paper) 0 calc(var(--notebook-top-margin) - var(--notebook-rule-width)),
+      transparent calc(var(--notebook-top-margin) - var(--notebook-rule-width)) 100%
+    ),
+    linear-gradient(
+      to bottom,
+      transparent 0 calc(100% - var(--notebook-bottom-margin)),
+      var(--paper) calc(100% - var(--notebook-bottom-margin)) 100%
+    ),
+    linear-gradient(
+      to right,
+      var(--paper) 0 var(--notebook-left-margin),
+      transparent var(--notebook-left-margin) 100%
+    ),
+    linear-gradient(
+      to right,
+      transparent 0 calc(100% - var(--notebook-right-margin)),
+      var(--paper) calc(100% - var(--notebook-right-margin)) 100%
+    ),
+    radial-gradient(
+      circle at 0 100%,
+      var(--notebook-dot-color) 0 var(--notebook-dot-radius),
+      transparent calc(var(--notebook-dot-radius) + 0.5px)
+    ),
+    linear-gradient(
+      to bottom,
+      transparent 0 calc(var(--notebook-rule-step) - var(--notebook-rule-width)),
+      var(--notebook-rule-color) calc(var(--notebook-rule-step) - var(--notebook-rule-width)) var(--notebook-rule-step)
+    );
+  background-position:
+    0 calc(var(--notebook-date-line-top) + var(--notebook-rule-step)),
+    0 0,
+    0 0,
+    0 0,
+    0 0,
+    var(--notebook-left-margin) calc(var(--notebook-top-margin) - var(--notebook-rule-step)),
+    0 calc(var(--notebook-top-margin) - var(--notebook-rule-step));
+  background-repeat:
+    no-repeat,
+    no-repeat,
+    no-repeat,
+    no-repeat,
+    no-repeat,
+    repeat,
+    repeat;
+  background-size:
+    100% var(--notebook-rule-width),
+    100% 100%,
+    100% 100%,
+    100% 100%,
+    100% 100%,
+    var(--notebook-dot-step) var(--notebook-rule-step),
+    100% var(--notebook-rule-step);
 }

@@ -11,7 +11,19 @@ const paperSizes = {
   a4: { label: "A4", width: 1400, height: 1980 }
 };
 const fixedPaper = { size: "a4", background: "lined" };
-const paperPatternSpacing = 48;
+const notebookRuleSpacing = 48;
+const notebookTopMargin = 144;
+const notebookBottomMargin = 96;
+const notebookLeftMargin = 56;
+const notebookRightMargin = 56;
+const notebookDotSpacing = notebookRuleSpacing;
+const notebookDateLineWidth = 280;
+const notebookDateLineTop = 48;
+const notebookRuleWidth = 1.15;
+const notebookDotRadius = 1.8;
+const notebookPaperColor = "#fffefa";
+const notebookRuleColor = "rgba(85, 142, 170, 0.36)";
+const notebookDotColor = "rgba(85, 142, 170, 0.28)";
 const fixedStrokeWidth = 2.5;
 const strokeEraserScreenRadius = 9;
 const pdfPageSize = { width: 595.28, height: 841.89 };
@@ -1091,19 +1103,40 @@ function renderPageForPdf(page) {
 
 function drawPaperBackground(targetContext, size) {
   targetContext.save();
-  targetContext.fillStyle = "#fffefa";
+  targetContext.fillStyle = notebookPaperColor;
   targetContext.fillRect(0, 0, size.width, size.height);
-  targetContext.strokeStyle = "rgba(47, 111, 115, 0.2)";
-  targetContext.lineWidth = 1;
+
+  const ruledLeft = notebookLeftMargin;
+  const ruledRight = size.width - notebookRightMargin;
+  const ruledBottom = size.height - notebookBottomMargin;
+  const dateRight = ruledRight;
+  const dateLeft = dateRight - notebookDateLineWidth;
+
+  targetContext.strokeStyle = notebookRuleColor;
+  targetContext.lineWidth = notebookRuleWidth;
   targetContext.beginPath();
 
-  for (let y = paperPatternSpacing; y < size.height; y += paperPatternSpacing) {
+  const dateLineY = Math.round(notebookDateLineTop + notebookRuleSpacing) + 0.5;
+  targetContext.moveTo(dateLeft, dateLineY);
+  targetContext.lineTo(dateRight, dateLineY);
+
+  for (let y = notebookTopMargin; y <= ruledBottom; y += notebookRuleSpacing) {
     const lineY = Math.round(y) + 0.5;
-    targetContext.moveTo(0, lineY);
-    targetContext.lineTo(size.width, lineY);
+    targetContext.moveTo(ruledLeft, lineY);
+    targetContext.lineTo(ruledRight, lineY);
   }
 
   targetContext.stroke();
+  targetContext.fillStyle = notebookDotColor;
+
+  for (let y = notebookTopMargin; y <= ruledBottom; y += notebookRuleSpacing) {
+    for (let x = ruledLeft; x <= ruledRight; x += notebookDotSpacing) {
+      targetContext.beginPath();
+      targetContext.arc(x, y + 0.5, notebookDotRadius, 0, Math.PI * 2);
+      targetContext.fill();
+    }
+  }
+
   targetContext.restore();
 }
 
@@ -1791,11 +1824,27 @@ function updatePaperPatterns() {
       continue;
     }
 
-    const stepX = Math.max(8, Math.round((paperPatternSpacing / canvas.width) * rect.width));
-    const stepY = Math.max(8, Math.round((paperPatternSpacing / canvas.height) * rect.height));
+    const scaleX = rect.width / canvas.width;
+    const scaleY = rect.height / canvas.height;
+    const ruleStep = Math.max(8, Math.round(notebookRuleSpacing * scaleY));
+    const topMargin = Math.max(ruleStep, Math.round(notebookTopMargin * scaleY));
+    const leftMargin = Math.max(18, Math.round(notebookLeftMargin * scaleX));
+    const rightMargin = Math.max(18, Math.round(notebookRightMargin * scaleX));
+    const bottomMargin = Math.max(ruleStep, Math.round(notebookBottomMargin * scaleY));
+    const dotStep = Math.max(18, Math.round(notebookDotSpacing * scaleX));
+    const dotRadius = Math.max(1, Math.round(notebookDotRadius * scaleY));
+    const dateLineWidth = Math.max(ruleStep * 3, Math.round(notebookDateLineWidth * scaleX));
+    const dateLineTop = Math.max(ruleStep, Math.round(notebookDateLineTop * scaleY));
 
-    canvas.style.setProperty("--paper-step-x", `${stepX}px`);
-    canvas.style.setProperty("--paper-step-y", `${stepY}px`);
+    canvas.style.setProperty("--notebook-rule-step", `${ruleStep}px`);
+    canvas.style.setProperty("--notebook-top-margin", `${topMargin}px`);
+    canvas.style.setProperty("--notebook-left-margin", `${leftMargin}px`);
+    canvas.style.setProperty("--notebook-right-margin", `${rightMargin}px`);
+    canvas.style.setProperty("--notebook-bottom-margin", `${bottomMargin}px`);
+    canvas.style.setProperty("--notebook-dot-step", `${dotStep}px`);
+    canvas.style.setProperty("--notebook-dot-radius", `${dotRadius}px`);
+    canvas.style.setProperty("--notebook-date-line-width", `${dateLineWidth}px`);
+    canvas.style.setProperty("--notebook-date-line-top", `${dateLineTop}px`);
   }
 }
 
