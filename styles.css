@@ -333,32 +333,13 @@ button {
   display: inline-flex;
   align-items: center;
   justify-content: flex-end;
-  gap: 4px;
   min-height: 16px;
-  min-width: 54px;
+  min-width: 104px;
   color: var(--muted);
   font-size: 12px;
   line-height: 16px;
   text-align: right;
-}
-
-.save-state-icon {
-  display: inline-grid;
-  width: 14px;
-  height: 16px;
-  flex: 0 0 auto;
-  place-items: center;
-  transform: translateY(1.0px);
-}
-
-.save-state-icon svg {
-  width: 14px;
-  height: 14px;
-  fill: none;
-  stroke: currentColor;
-  stroke-linecap: round;
-  stroke-linejoin: round;
-  stroke-width: 2;
+  white-space: nowrap;
 }
 
 #saveStateTime {
@@ -367,6 +348,29 @@ button {
   min-height: 16px;
   line-height: 16px;
   font-variant-numeric: tabular-nums;
+}
+
+.eraser-preview {
+  position: fixed;
+  z-index: 30;
+  left: 0;
+  top: 0;
+  display: none;
+  pointer-events: none;
+  border: 1.5px solid rgba(47, 111, 115, 0.72);
+  border-radius: 999px;
+  background: rgba(47, 111, 115, 0.12);
+  box-shadow: 0 0 0 3px rgba(47, 111, 115, 0.08);
+  transform: translate(-50%, -50%);
+}
+
+.eraser-preview.visible {
+  display: block;
+}
+
+.eraser-preview.stroke-mode {
+  background: rgba(47, 111, 115, 0.16);
+  box-shadow: 0 0 0 4px rgba(47, 111, 115, 0.1);
 }
 
 .editor-toolbar {
@@ -428,6 +432,22 @@ button {
 .color-swatches {
   gap: 5px;
   padding: 3px 5px;
+}
+
+.selection-actions {
+  gap: 3px;
+  padding: 3px;
+}
+
+.selection-actions .icon-button {
+  width: 34px;
+  height: 34px;
+  border-color: transparent;
+  background: transparent;
+}
+
+.selection-actions .icon-button:not(:disabled):hover {
+  background: rgba(255, 255, 255, 0.48);
 }
 
 .eraser-tool-cluster.open .eraser-mode-button {
@@ -573,7 +593,7 @@ button {
 
 .page-stack[data-tool="eraser"] .drawing-canvas,
 .page-stack[data-tool="stroke-eraser"] .drawing-canvas {
-  cursor: cell;
+  cursor: default;
 }
 
 .drawing-canvas[data-background="lined"] {
