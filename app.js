@@ -17,6 +17,7 @@ const elements = {
   listView: document.querySelector("#listView"),
   editorView: document.querySelector("#editorView"),
   newNoteButton: document.querySelector("#newNoteButton"),
+  installAppButton: document.querySelector("#installAppButton"),
   backToListButton: document.querySelector("#backToListButton"),
   clearCanvasButton: document.querySelector("#clearCanvasButton"),
   undoButton: document.querySelector("#undoButton"),
@@ -60,6 +61,8 @@ let canvasZoom = 1;
 let visiblePageSelectionFrame = null;
 let pencilModeActive = true;
 let touchScrollGesture = null;
+let deferredInstallPrompt = null;
+let appInstalled = isAppInstalled();
 
 const minCanvasZoom = 0.5;
 const maxCanvasZoom = 2;
@@ -88,6 +91,8 @@ elements.newNoteButton.addEventListener("click", () => {
   persistSoon();
   render();
 });
+
+elements.installAppButton.addEventListener("click", installAppFromList);
 
 elements.backToListButton.addEventListener("click", () => {
   currentView = "list";
@@ -187,6 +192,17 @@ elements.titleInput.addEventListener("input", () => {
 });
 
 window.addEventListener("beforeunload", persistNow);
+window.addEventListener("beforeinstallprompt", (event) => {
+  event.preventDefault();
+  deferredInstallPrompt = event;
+  appInstalled = false;
+  updateInstallButton();
+});
+window.addEventListener("appinstalled", () => {
+  deferredInstallPrompt = null;
+  appInstalled = true;
+  updateInstallButton();
+});
 
 if ("serviceWorker" in navigator && window.location.protocol !== "file:") {
   window.addEventListener("load", () => {
@@ -434,6 +450,7 @@ function render() {
   updateActionButtons();
   updateSaveState();
   updateInputMode();
+  updateInstallButton();
 }
 
 function renderView() {
@@ -447,6 +464,57 @@ function renderView() {
   if (!showEditor) {
     currentView = "list";
   }
+}
+
+async function installAppFromList() {
+  if (isAppInstalled()) {
+    appInstalled = true;
+    updateInstallButton();
+    return;
+  }
+
+  if (!deferredInstallPrompt) {
+    window.alert(getManualInstallMessage());
+    return;
+  }
+
+  const promptEvent = deferredInstallPrompt;
+  deferredInstallPrompt = null;
+  updateInstallButton();
+
+  try {
+    await promptEvent.prompt();
+    const choice = await promptEvent.userChoice;
+    appInstalled = choice.outcome === "accepted";
+  } catch (error) {
+    console.error("PWA install prompt failed:", error);
+  } finally {
+    updateInstallButton();
+  }
+}
+
+function updateInstallButton() {
+  const installed = isAppInstalled() || appInstalled;
+  elements.installAppButton.hidden = installed;
+  elements.installAppButton.disabled = installed;
+  elements.installAppButton.title = deferredInstallPrompt ? "アプリをインストール" : "インストール方法";
+  elements.installAppButton.setAttribute(
+    "aria-label",
+    deferredInstallPrompt ? "アプリをインストール" : "インストール方法"
+  );
+}
+
+function isAppInstalled() {
+  return window.matchMedia("(display-mode: standalone)").matches
+    || window.navigator.standalone === true;
+}
+
+function getManualInstallMessage() {
+  if (window.location.protocol === "file:") {
+    return "PWAとしてインストールするには，開発用サーバーやHTTPSから開いてください。";
+  }
+
+  return "このブラウザでは自動インストール画面を開けません。ブラウザの共有メニューまたはメニューから「ホーム画面に追加」または「アプリをインストール」を選んでください。";
 }
 
 function renderEditor() {
