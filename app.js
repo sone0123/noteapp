@@ -25,6 +25,11 @@ const notebookPaperColor = "#fffefa";
 const notebookRuleColor = "rgba(85, 142, 170, 0.36)";
 const notebookDotColor = "rgba(85, 142, 170, 0.28)";
 const fixedStrokeWidth = 2.5;
+const fountainPenMinScale = 0.42;
+const fountainPenMaxScale = 1.24;
+const fountainPenSpeedReference = 24;
+const fountainPenTaperPoints = 4;
+const fountainPenFallbackPressure = 0.55;
 const lassoPasteOffset = 48;
 const lassoPointSpacing = 3;
 const lassoMinimumPoints = 3;
@@ -2299,7 +2304,7 @@ function getStrokeBounds(stroke) {
     return null;
   }
 
-  const padding = stroke.tool === "eraser" ? getNormalEraserCanvasRadius() : fixedStrokeWidth / 2;
+  const padding = stroke.tool === "eraser" ? getNormalEraserCanvasRadius() : getPenStrokeCanvasRadius(stroke);
   return getPointsBounds(stroke.points, padding);
 }
 
@@ -2446,6 +2451,7 @@ function translateStroke(stroke, deltaX, deltaY) {
 
 function translatePoint(point, deltaX, deltaY) {
   return {
+    ...point,
     x: point.x + deltaX,
     y: point.y + deltaY
   };
@@ -2490,10 +2496,16 @@ function cloneStroke(stroke) {
 }
 
 function clonePoint(point) {
-  return {
+  const clonedPoint = {
     x: point.x,
     y: point.y
   };
+
+  if (typeof point.pressure === "number") {
+    clonedPoint.pressure = point.pressure;
+  }
+
+  return clonedPoint;
 }
 
 function handleEditorKeyboardShortcuts(event) {
@@ -2697,6 +2709,11 @@ function getNormalEraserCanvasRadius() {
   return (fixedStrokeWidth * 3) / 2;
 }
 
+function getPenStrokeCanvasRadius(stroke) {
+  const baseWidth = typeof stroke?.width === "number" ? stroke.width : fixedStrokeWidth;
+  return (baseWidth * fountainPenMaxScale) / 2;
+}
+
 function getNormalEraserScreenRadius(canvas) {
   return getCanvasLengthAsScreenPixels(canvas, getNormalEraserCanvasRadius());
 }
@@ -2726,7 +2743,7 @@ function hideEraserPreview() {
 
 function strokeHitsPoint(stroke, point, hitRadius) {
   const points = stroke.points;
-  const radius = hitRadius + fixedStrokeWidth / 2;
+  const radius = hitRadius + getPenStrokeCanvasRadius(stroke);
   const radiusSquared = radius * radius;
 
   if (points.length === 1) {
@@ -2775,8 +2792,25 @@ function getCanvasPoint(event, canvas) {
 
   return {
     x: clamp(((event.clientX - rect.left) / rect.width) * canvas.width, 0, canvas.width),
-    y: clamp(((event.clientY - rect.top) / rect.height) * canvas.height, 0, canvas.height)
+    y: clamp(((event.clientY - rect.top) / rect.height) * canvas.height, 0, canvas.height),
+    pressure: getPointerPressure(event)
   };
+}
+
+function getPointerPressure(event) {
+  if (typeof event.pressure !== "number") {
+    return fountainPenFallbackPressure;
+  }
+
+  if (event.pointerType === "pen") {
+    return clamp(event.pressure || 0.1, 0.1, 1);
+  }
+
+  if (event.pressure > 0) {
+    return clamp(event.pressure, 0.2, 1);
+  }
+
+  return fountainPenFallbackPressure;
 }
 
 function clamp(value, min, max) {
@@ -2872,8 +2906,20 @@ function drawStroke(stroke, targetContext) {
 
   targetContext.save();
   targetContext.globalCompositeOperation = stroke.tool === "eraser" ? "destination-out" : "source-over";
+
+  if (stroke.tool === "pen") {
+    drawFountainStroke(stroke, targetContext);
+    targetContext.restore();
+    return;
+  }
+
+  drawFixedWidthStroke(stroke, targetContext, fixedStrokeWidth * 3);
+  targetContext.restore();
+}
+
+function drawFixedWidthStroke(stroke, targetContext, lineWidth) {
   targetContext.strokeStyle = stroke.color;
-  targetContext.lineWidth = stroke.tool === "eraser" ? fixedStrokeWidth * 3 : fixedStrokeWidth;
+  targetContext.lineWidth = lineWidth;
   targetContext.lineCap = "round";
   targetContext.lineJoin = "round";
 
@@ -2899,7 +2945,118 @@ function drawStroke(stroke, targetContext) {
   }
 
   targetContext.stroke();
+}
+
+function drawFountainStroke(stroke, targetContext) {
+  const points = stroke.points;
+  const baseWidth = typeof stroke.width === "number" ? stroke.width : fixedStrokeWidth;
+  const widths = points.map((point, index) => getFountainPointWidth(points, index, baseWidth));
+
+  targetContext.fillStyle = stroke.color;
+  targetContext.globalAlpha = 0.96;
+
+  if (points.length === 1) {
+    drawFountainDot(targetContext, points[0], widths[0]);
+    return;
+  }
+
+  const leftEdge = [];
+  const rightEdge = [];
+
+  for (let index = 0; index < points.length; index += 1) {
+    const point = points[index];
+    const previous = points[index - 1] ?? point;
+    const next = points[index + 1] ?? point;
+    let tangentX = next.x - previous.x;
+    let tangentY = next.y - previous.y;
+    let tangentLength = Math.hypot(tangentX, tangentY);
+
+    if (tangentLength === 0) {
+      tangentX = 1;
+      tangentY = 0;
+      tangentLength = 1;
+    }
+
+    const normalX = -tangentY / tangentLength;
+    const normalY = tangentX / tangentLength;
+    const radius = widths[index] / 2;
+
+    leftEdge.push({
+      x: point.x + normalX * radius,
+      y: point.y + normalY * radius
+    });
+    rightEdge.push({
+      x: point.x - normalX * radius,
+      y: point.y - normalY * radius
+    });
+  }
+
+  targetContext.beginPath();
+  targetContext.moveTo(leftEdge[0].x, leftEdge[0].y);
+  addSmoothOutline(targetContext, leftEdge);
+
+  const reversedRightEdge = [...rightEdge].reverse();
+  targetContext.lineTo(reversedRightEdge[0].x, reversedRightEdge[0].y);
+  addSmoothOutline(targetContext, reversedRightEdge);
+  targetContext.closePath();
+  targetContext.fill();
+}
+
+function drawFountainDot(targetContext, point, width) {
+  targetContext.save();
+  targetContext.translate(point.x, point.y);
+  targetContext.rotate(-Math.PI / 7);
+  targetContext.beginPath();
+  targetContext.ellipse(0, 0, width * 0.52, Math.max(width * 0.28, 0.45), 0, 0, Math.PI * 2);
+  targetContext.fill();
   targetContext.restore();
+}
+
+function addSmoothOutline(targetContext, points) {
+  if (points.length < 2) {
+    return;
+  }
+
+  for (let index = 0; index < points.length - 1; index += 1) {
+    const current = points[index];
+    const next = points[index + 1];
+    const midX = (current.x + next.x) / 2;
+    const midY = (current.y + next.y) / 2;
+    targetContext.quadraticCurveTo(current.x, current.y, midX, midY);
+  }
+
+  const lastPoint = points[points.length - 1];
+  targetContext.lineTo(lastPoint.x, lastPoint.y);
+}
+
+function getFountainPointWidth(points, index, baseWidth) {
+  const point = points[index];
+  const previous = points[index - 1] ?? point;
+  const next = points[index + 1] ?? point;
+  const travel = (Math.hypot(point.x - previous.x, point.y - previous.y)
+    + Math.hypot(next.x - point.x, next.y - point.y)) / 2;
+  const speedFactor = clamp(travel / fountainPenSpeedReference, 0, 1);
+  const pressure = getStoredPressure(point);
+  const minWidth = baseWidth * fountainPenMinScale;
+  const maxWidth = baseWidth * fountainPenMaxScale;
+  const pressureFactor = 0.32 + pressure * 0.68;
+  let width = minWidth + (maxWidth - minWidth) * pressureFactor;
+
+  width *= 1 - speedFactor * 0.28;
+
+  if (points.length > 2) {
+    const edgeDistance = Math.min(index, points.length - 1 - index);
+    const taper = 0.58 + 0.42 * clamp(edgeDistance / fountainPenTaperPoints, 0, 1);
+    width *= taper;
+  }
+
+  return clamp(width, minWidth, maxWidth);
+}
+
+function getStoredPressure(point) {
+  return typeof point.pressure === "number"
+    ? clamp(point.pressure, 0.1, 1)
+    : fountainPenFallbackPressure;
 }
 
 function drawLassoSelection(selection, targetContext) {

@@ -1,4 +1,4 @@
-const cacheName = "noteapp-pwa-v27";
+const cacheName = "noteapp-pwa-v28";
 const appShell = [
   "./",
   "./index.html",
