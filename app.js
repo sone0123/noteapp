@@ -188,6 +188,14 @@ elements.titleInput.addEventListener("input", () => {
 
 window.addEventListener("beforeunload", persistNow);
 
+if ("serviceWorker" in navigator && window.location.protocol !== "file:") {
+  window.addEventListener("load", () => {
+    navigator.serviceWorker.register("./service-worker.js").catch((error) => {
+      console.error("Service Worker registration failed:", error);
+    });
+  });
+}
+
 function createNote() {
   const now = new Date().toISOString();
   const firstPage = createPage();

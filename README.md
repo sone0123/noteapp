@@ -27,17 +27,19 @@ HTML / CSS / JavaScriptだけで動く最小版です。
 - タイトル検索
 - 最終更新時刻表示
 - `localStorage` への自動保存
+- PWAインストール対応
+- Service Workerによる基本ファイルのオフラインキャッシュ
 - モバイルファーストのレスポンシブレイアウト
 - ノート一覧ページと手書き編集ページの分離
 - 編集中はノート一覧を隠す集中モード
 
-まだPWA化，Service Worker，IndexedDB，インポートは未実装です。
+まだIndexedDB，インポートは未実装です。
 
 ## 動かし方
 
 `index.html` をブラウザで開きます。
 
-開発用サーバーで確認する場合:
+PWA機能を確認する場合は，開発用サーバーで開きます:
 
 ```sh
 python3 -m http.server 5173
@@ -45,10 +47,11 @@ python3 -m http.server 5173
 
 その後，ブラウザで `http://localhost:5173` を開きます。
 
+`file://` で直接開いた場合，Service Workerとインストール機能は有効になりません。
+
 ## 次にやること
 
 1. タブレットで手書きの遅延と操作感を確認する
-2. エクスポート/インポートを追加する
-3. `manifest.webmanifest` を追加する
-4. Service Workerでオフライン対応する
-5. 保存先を `localStorage` から `IndexedDB` に移す
+2. インポートを追加する
+3. 保存先を `localStorage` から `IndexedDB` に移す
+4. PWAとしてインストール後のiPad操作感を確認する
