@@ -61,7 +61,11 @@
           <input id="titleInput" class="title-input" type="text" placeholder="無題" autocomplete="off">
 
           <div class="document-actions">
-            <div class="save-state" id="saveState" role="status" aria-live="polite">最終更新 --</div>
+            <div class="save-state" id="saveState" role="status" aria-live="polite">
+              <span class="save-state-icon" id="saveStateIcon" aria-hidden="true"></span>
+              <span class="visually-hidden">最終更新</span>
+              <span id="saveStateTime">--</span>
+            </div>
             <div class="page-state" id="pageState" aria-live="polite">1 / 1</div>
           </div>
         </header>

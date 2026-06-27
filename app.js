@@ -20,7 +20,7 @@ const notebookDotSpacing = notebookRuleSpacing;
 const notebookDateLineWidth = 280;
 const notebookDateLineTop = 48;
 const notebookRuleWidth = 1.15;
-const notebookDotRadius = 1.8;
+const notebookDotRadius = 2.4;
 const notebookPaperColor = "#fffefa";
 const notebookRuleColor = "rgba(85, 142, 170, 0.36)";
 const notebookDotColor = "rgba(85, 142, 170, 0.28)";
@@ -59,7 +59,9 @@ const elements = {
   titleInput: document.querySelector("#titleInput"),
   canvasShell: document.querySelector(".canvas-shell"),
   pageStack: document.querySelector("#pageStack"),
-  saveState: document.querySelector("#saveState")
+  saveState: document.querySelector("#saveState"),
+  saveStateIcon: document.querySelector("#saveStateIcon"),
+  saveStateTime: document.querySelector("#saveStateTime")
 };
 
 const pageStackResizeObserver = typeof ResizeObserver === "function"
@@ -246,7 +248,8 @@ function applyIcons() {
     [elements.undoButton, "undo"],
     [elements.redoButton, "redo"],
     [elements.exportPdfButton, "fileDown"],
-    [elements.clearCanvasButton, "trash"]
+    [elements.clearCanvasButton, "trash"],
+    [elements.saveStateIcon, "clock"]
   ];
 
   for (const [button, iconName] of iconTargets) {
@@ -298,21 +301,27 @@ function getLucideIconPaths(iconName) {
       <path d="m5 11 9 9"></path>
     `,
     strokeEraser: `
-      <circle cx="6" cy="6" r="3"></circle>
-      <path d="M8.12 8.12 12 12"></path>
-      <path d="M20 4 8.12 15.88"></path>
-      <circle cx="6" cy="18" r="3"></circle>
-      <path d="M14.8 14.8 20 20"></path>
+      <path d="M7 3.5c5-2 7 2.5 3 4C1.5 10 2 15 5 16c5 2 9-10 14-7s.5 13.5-4 12c-5-2.5.5-11 6-2"></path>
+    `,
+    clock: `
+      <circle cx="12" cy="12" r="10"></circle>
+      <polyline points="12 6 12 12 16 14"></polyline>
     `,
     pencilMode: `
-      <path d="M21.174 6.812a1 1 0 0 0-3.986-3.987L3.842 16.174a2 2 0 0 0-.5.83l-1.321 4.352a.5.5 0 0 0 .623.622l4.353-1.32a2 2 0 0 0 .83-.497z"></path>
-      <path d="m15 5 4 4"></path>
+      <path d="M10 3H8"></path>
+      <path d="m15.007 5.008 3.987 3.986"></path>
+      <path d="M20 15v4"></path>
+      <path d="M21.174 6.813a2.82 2.82 0 0 0-3.986-3.987L3.842 16.175a2 2 0 0 0-.5.83l-1.321 4.352a.5.5 0 0 0 .623.622l4.353-1.32a2 2 0 0 0 .83-.497z"></path>
+      <path d="M22 17h-4"></path>
+      <path d="M4 5v4"></path>
+      <path d="M6 7H2"></path>
+      <path d="M9 2v2"></path>
     `,
     touchMode: `
-      <path d="M18 11V6a2 2 0 0 0-2-2v0a2 2 0 0 0-2 2v0"></path>
-      <path d="M14 10V4a2 2 0 0 0-2-2v0a2 2 0 0 0-2 2v2"></path>
-      <path d="M10 10.5V6a2 2 0 0 0-2-2v0a2 2 0 0 0-2 2v8"></path>
-      <path d="M18 8a2 2 0 1 1 4 0v6a8 8 0 0 1-8 8h-2c-2.8 0-4.5-.86-6.12-2.82L3 15.7a2.5 2.5 0 0 1 .2-3.5v0a2.5 2.5 0 0 1 3.3.1L8 14"></path>
+      <path d="m10 10-6.157 6.162a2 2 0 0 0-.5.833l-1.322 4.36a.5.5 0 0 0 .622.624l4.358-1.323a2 2 0 0 0 .83-.5L14 13.982"></path>
+      <path d="m12.829 7.172 4.359-4.346a1 1 0 1 1 3.986 3.986l-4.353 4.353"></path>
+      <path d="m15 5 4 4"></path>
+      <path d="m2 2 20 20"></path>
     `,
     fileX: `
       <path d="M14.5 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7.5Z"></path>
@@ -740,7 +749,7 @@ function persistNow() {
 }
 
 function updateSaveState(note = getSelectedNote()) {
-  elements.saveState.textContent = note ? `最終更新 ${formatDate(note.updatedAt)}` : "最終更新 --";
+  elements.saveStateTime.textContent = note ? formatDate(note.updatedAt) : "--";
 }
 
 function render() {
@@ -1443,6 +1452,10 @@ function roundZoom(value) {
   return Math.round(value * 100) / 100;
 }
 
+function roundToTenth(value) {
+  return Math.round(value * 10) / 10;
+}
+
 function updateZoomControls() {
   const hasNote = Boolean(getSelectedNote());
   const zoomPercent = Math.round(canvasZoom * 100);
@@ -1993,7 +2006,7 @@ function updatePaperPatterns() {
     const rightMargin = Math.max(18, Math.round(notebookRightMargin * scaleX));
     const bottomMargin = Math.max(ruleStep, Math.round(notebookBottomMargin * scaleY));
     const dotStep = Math.max(18, Math.round(notebookDotSpacing * scaleX));
-    const dotRadius = Math.max(1, Math.round(notebookDotRadius * scaleY));
+    const dotRadius = Math.max(1.2, roundToTenth(notebookDotRadius * scaleY));
     const dateLineWidth = Math.max(ruleStep * 3, Math.round(notebookDateLineWidth * scaleX));
     const dateLineTop = Math.max(ruleStep, Math.round(notebookDateLineTop * scaleY));
 

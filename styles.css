@@ -330,10 +330,43 @@ button {
 }
 
 .save-state {
+  display: inline-flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 4px;
+  min-height: 16px;
   min-width: 54px;
   color: var(--muted);
   font-size: 12px;
+  line-height: 16px;
   text-align: right;
+}
+
+.save-state-icon {
+  display: inline-grid;
+  width: 14px;
+  height: 16px;
+  flex: 0 0 auto;
+  place-items: center;
+  transform: translateY(1.0px);
+}
+
+.save-state-icon svg {
+  width: 14px;
+  height: 14px;
+  fill: none;
+  stroke: currentColor;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-width: 2;
+}
+
+#saveStateTime {
+  display: inline-flex;
+  align-items: center;
+  min-height: 16px;
+  line-height: 16px;
+  font-variant-numeric: tabular-nums;
 }
 
 .editor-toolbar {
@@ -512,7 +545,7 @@ button {
   --notebook-bottom-margin: 56px;
   --notebook-dot-step: 28px;
   --notebook-rule-width: 1px;
-  --notebook-dot-radius: 1px;
+  --notebook-dot-radius: 1.2px;
   --notebook-date-line-width: 160px;
   --notebook-date-line-top: 28px;
   --notebook-rule-color: rgba(85, 142, 170, 0.36);
