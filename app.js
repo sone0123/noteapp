@@ -40,9 +40,11 @@ const elements = {
   undoButton: document.querySelector("#undoButton"),
   redoButton: document.querySelector("#redoButton"),
   exportPdfButton: document.querySelector("#exportPdfButton"),
+  penToolCluster: document.querySelector("#penToolCluster"),
   penButton: document.querySelector("#penButton"),
+  eraserToolCluster: document.querySelector("#eraserToolCluster"),
   eraserButton: document.querySelector("#eraserButton"),
-  strokeEraserButton: document.querySelector("#strokeEraserButton"),
+  eraserModeButton: document.querySelector("#eraserModeButton"),
   pencilModeButton: document.querySelector("#pencilModeButton"),
   deletePageButton: document.querySelector("#deletePageButton"),
   pageState: document.querySelector("#pageState"),
@@ -50,6 +52,7 @@ const elements = {
   zoomResetButton: document.querySelector("#zoomResetButton"),
   zoomInButton: document.querySelector("#zoomInButton"),
   zoomValue: document.querySelector("#zoomValue"),
+  colorSwatches: document.querySelector("#colorSwatches"),
   swatches: [...document.querySelectorAll(".swatch")],
   searchInput: document.querySelector("#searchInput"),
   noteList: document.querySelector("#noteList"),
@@ -71,6 +74,7 @@ let databasePromise = null;
 let saveTimer = null;
 let currentStroke = null;
 let activeTool = "pen";
+let activeEraserTool = "eraser";
 let activeColor = "#202124";
 let undoStack = [];
 let redoStack = [];
@@ -87,6 +91,7 @@ const minCanvasZoom = 0.5;
 const maxCanvasZoom = 2;
 const canvasZoomStep = 0.25;
 
+applyIcons();
 initializeApp();
 
 pageStackResizeObserver?.observe(elements.pageStack);
@@ -149,12 +154,13 @@ elements.penButton.addEventListener("click", () => {
 });
 
 elements.eraserButton.addEventListener("click", () => {
-  activeTool = "eraser";
+  activeTool = activeEraserTool;
   updateToolButtons();
 });
 
-elements.strokeEraserButton.addEventListener("click", () => {
-  activeTool = "stroke-eraser";
+elements.eraserModeButton.addEventListener("click", () => {
+  activeEraserTool = activeEraserTool === "eraser" ? "stroke-eraser" : "eraser";
+  activeTool = activeEraserTool;
   updateToolButtons();
 });
 
@@ -225,6 +231,148 @@ if ("serviceWorker" in navigator && window.location.protocol !== "file:") {
       console.error("Service Worker registration failed:", error);
     });
   });
+}
+
+function applyIcons() {
+  const iconTargets = [
+    [elements.installAppButton, "download"],
+    [elements.newNoteButton, "plus"],
+    [elements.backToListButton, "arrowLeft"],
+    [elements.penButton, "pen"],
+    [elements.eraserButton, "eraser"],
+    [elements.deletePageButton, "fileX"],
+    [elements.zoomOutButton, "zoomOut"],
+    [elements.zoomInButton, "zoomIn"],
+    [elements.undoButton, "undo"],
+    [elements.redoButton, "redo"],
+    [elements.exportPdfButton, "fileDown"],
+    [elements.clearCanvasButton, "trash"]
+  ];
+
+  for (const [button, iconName] of iconTargets) {
+    setButtonIcon(button, iconName);
+  }
+
+  updateEraserModeIcon();
+  updatePencilModeIcon();
+}
+
+function setButtonIcon(button, iconName) {
+  if (!button) {
+    return;
+  }
+
+  button.innerHTML = getLucideIcon(iconName);
+}
+
+function getLucideIcon(iconName) {
+  return `
+    <svg class="lucide" viewBox="0 0 24 24" aria-hidden="true">
+      ${getLucideIconPaths(iconName)}
+    </svg>
+  `;
+}
+
+function getLucideIconPaths(iconName) {
+  const paths = {
+    arrowLeft: `
+      <path d="m12 19-7-7 7-7"></path>
+      <path d="M19 12H5"></path>
+    `,
+    plus: `
+      <path d="M12 5v14"></path>
+      <path d="M5 12h14"></path>
+    `,
+    download: `
+      <path d="M12 15V3"></path>
+      <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
+      <path d="m7 10 5 5 5-5"></path>
+    `,
+    pen: `
+      <path d="M12 20h9"></path>
+      <path d="M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4Z"></path>
+    `,
+    eraser: `
+      <path d="m7 21-4.3-4.3c-1-1-1-2.5 0-3.4l9.6-9.6c1-1 2.5-1 3.4 0l5.6 5.6c1 1 1 2.5 0 3.4L13 21"></path>
+      <path d="M22 21H7"></path>
+      <path d="m5 11 9 9"></path>
+    `,
+    strokeEraser: `
+      <circle cx="6" cy="6" r="3"></circle>
+      <path d="M8.12 8.12 12 12"></path>
+      <path d="M20 4 8.12 15.88"></path>
+      <circle cx="6" cy="18" r="3"></circle>
+      <path d="M14.8 14.8 20 20"></path>
+    `,
+    pencilMode: `
+      <path d="M21.174 6.812a1 1 0 0 0-3.986-3.987L3.842 16.174a2 2 0 0 0-.5.83l-1.321 4.352a.5.5 0 0 0 .623.622l4.353-1.32a2 2 0 0 0 .83-.497z"></path>
+      <path d="m15 5 4 4"></path>
+    `,
+    touchMode: `
+      <path d="M18 11V6a2 2 0 0 0-2-2v0a2 2 0 0 0-2 2v0"></path>
+      <path d="M14 10V4a2 2 0 0 0-2-2v0a2 2 0 0 0-2 2v2"></path>
+      <path d="M10 10.5V6a2 2 0 0 0-2-2v0a2 2 0 0 0-2 2v8"></path>
+      <path d="M18 8a2 2 0 1 1 4 0v6a8 8 0 0 1-8 8h-2c-2.8 0-4.5-.86-6.12-2.82L3 15.7a2.5 2.5 0 0 1 .2-3.5v0a2.5 2.5 0 0 1 3.3.1L8 14"></path>
+    `,
+    fileX: `
+      <path d="M14.5 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7.5Z"></path>
+      <polyline points="14 2 14 8 20 8"></polyline>
+      <path d="m10 13 4 4"></path>
+      <path d="m14 13-4 4"></path>
+    `,
+    zoomOut: `
+      <circle cx="11" cy="11" r="8"></circle>
+      <path d="m21 21-4.3-4.3"></path>
+      <path d="M8 11h6"></path>
+    `,
+    zoomIn: `
+      <circle cx="11" cy="11" r="8"></circle>
+      <path d="m21 21-4.3-4.3"></path>
+      <path d="M8 11h6"></path>
+      <path d="M11 8v6"></path>
+    `,
+    undo: `
+      <path d="M9 14 4 9l5-5"></path>
+      <path d="M4 9h10.5a5.5 5.5 0 0 1 0 11H13"></path>
+    `,
+    redo: `
+      <path d="m15 14 5-5-5-5"></path>
+      <path d="M20 9H9.5a5.5 5.5 0 0 0 0 11H11"></path>
+    `,
+    fileDown: `
+      <path d="M14.5 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7.5Z"></path>
+      <polyline points="14 2 14 8 20 8"></polyline>
+      <path d="M12 18v-6"></path>
+      <path d="m9 15 3 3 3-3"></path>
+    `,
+    trash: `
+      <path d="M3 6h18"></path>
+      <path d="M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6"></path>
+      <path d="M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2"></path>
+      <line x1="10" x2="10" y1="11" y2="17"></line>
+      <line x1="14" x2="14" y1="11" y2="17"></line>
+    `
+  };
+
+  return paths[iconName] ?? paths.plus;
+}
+
+function updatePencilModeIcon() {
+  setButtonIcon(elements.pencilModeButton, pencilModeActive ? "pencilMode" : "touchMode");
+}
+
+function updateEraserModeIcon() {
+  const eraserIcon = getEraserIconName();
+  const alternateIcon = activeEraserTool === "stroke-eraser" ? "eraser" : "strokeEraser";
+
+  setButtonIcon(elements.eraserButton, eraserIcon);
+  setButtonIcon(elements.eraserModeButton, alternateIcon);
+  elements.eraserToolCluster.classList.toggle("normal-selected", activeEraserTool === "eraser");
+  elements.eraserToolCluster.classList.toggle("stroke-selected", activeEraserTool === "stroke-eraser");
+}
+
+function getEraserIconName() {
+  return activeEraserTool === "stroke-eraser" ? "strokeEraser" : "eraser";
 }
 
 async function initializeApp() {
@@ -774,11 +922,7 @@ function renderList() {
     deleteButton.className = "icon-button danger note-delete";
     deleteButton.title = "ノート削除";
     deleteButton.setAttribute("aria-label", `${title.textContent}を削除`);
-    deleteButton.innerHTML = `
-      <svg viewBox="0 0 24 24" aria-hidden="true">
-        <path d="M4 7h16M10 11v6M14 11v6M6 7l1 14h10l1-14M9 7V4h6v3"></path>
-      </svg>
-    `;
+    setButtonIcon(deleteButton, "trash");
     deleteButton.addEventListener("click", () => {
       deleteNote(note.id);
     });
@@ -792,17 +936,34 @@ function updateToolButtons() {
   const penActive = activeTool === "pen";
   const eraserActive = activeTool === "eraser";
   const strokeEraserActive = activeTool === "stroke-eraser";
+  const eraserGroupActive = eraserActive || strokeEraserActive;
+  const eraserLabel = activeEraserTool === "stroke-eraser"
+    ? "ストローク消しゴム"
+    : "通常の消しゴム";
+  const eraserModeLabel = activeEraserTool === "stroke-eraser"
+    ? "通常の消しゴムに切り替え"
+    : "ストローク消しゴムに切り替え";
 
   elements.penButton.classList.toggle("active", penActive);
-  elements.eraserButton.classList.toggle("active", eraserActive);
-  elements.strokeEraserButton.classList.toggle("active", strokeEraserActive);
-  elements.pencilModeButton.classList.toggle("active", pencilModeActive);
+  elements.eraserButton.classList.toggle("active", eraserGroupActive);
+  elements.penToolCluster.classList.toggle("open", penActive);
+  elements.eraserToolCluster.classList.toggle("open", eraserGroupActive);
+  elements.pencilModeButton.classList.remove("active");
+  elements.eraserModeButton.classList.remove("active");
   elements.penButton.setAttribute("aria-pressed", String(penActive));
-  elements.eraserButton.setAttribute("aria-pressed", String(eraserActive));
-  elements.strokeEraserButton.setAttribute("aria-pressed", String(strokeEraserActive));
+  elements.eraserButton.setAttribute("aria-pressed", String(eraserGroupActive));
+  elements.eraserModeButton.setAttribute("aria-pressed", "false");
   elements.pencilModeButton.setAttribute("aria-pressed", String(pencilModeActive));
+  elements.eraserButton.title = eraserLabel;
+  elements.eraserButton.setAttribute("aria-label", eraserLabel);
+  elements.eraserModeButton.title = eraserModeLabel;
+  elements.eraserModeButton.setAttribute("aria-label", eraserModeLabel);
   elements.pencilModeButton.title = pencilModeActive ? "Pencilモード" : "タッチ描画モード";
   elements.pencilModeButton.setAttribute("aria-label", pencilModeActive ? "Pencilモード" : "タッチ描画モード");
+  elements.colorSwatches.hidden = !penActive;
+  elements.eraserModeButton.hidden = !eraserGroupActive;
+  updateEraserModeIcon();
+  updatePencilModeIcon();
   elements.pageStack.dataset.tool = activeTool;
 }
 

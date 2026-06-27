@@ -67,28 +67,36 @@
         </header>
 
         <div class="editor-toolbar" role="toolbar" aria-label="描画ツール">
-          <button class="icon-button tool-button active" id="penButton" type="button" title="ペン" aria-label="ペン" aria-pressed="true">
-            <svg viewBox="0 0 24 24" aria-hidden="true">
-              <path d="m18 2 4 4-12 12-5 1 1-5L18 2Z"></path>
-              <path d="m14 6 4 4"></path>
-            </svg>
-          </button>
-          <button class="icon-button tool-button" id="eraserButton" type="button" title="消しゴム" aria-label="消しゴム" aria-pressed="false">
-            <svg viewBox="0 0 24 24" aria-hidden="true">
-              <path d="m7 21-5-5L14 4a3 3 0 0 1 4 0l2 2a3 3 0 0 1 0 4L9 21H7Z"></path>
-              <path d="m12 8 6 6"></path>
-              <path d="M3 21h18"></path>
-            </svg>
-          </button>
-          <button class="icon-button tool-button" id="strokeEraserButton" type="button" title="ストローク消しゴム" aria-label="ストローク消しゴム" aria-pressed="false">
-            <svg viewBox="0 0 24 24" aria-hidden="true">
-              <path d="m7 21-5-5L14 4a3 3 0 0 1 4 0l2 2a3 3 0 0 1 0 4L9 21H7Z"></path>
-              <path d="m12 8 6 6"></path>
-              <path d="M3 21h7"></path>
-              <path d="M14 19c1.4-1.7 3-1.7 4.5 0S21 20.7 22 19"></path>
-            </svg>
-          </button>
-          <button class="icon-button tool-button active" id="pencilModeButton" type="button" title="Pencilモード" aria-label="Pencilモード" aria-pressed="true">
+          <div class="tool-cluster open" id="penToolCluster">
+            <button class="icon-button tool-button active" id="penButton" type="button" title="ペン" aria-label="ペン" aria-pressed="true">
+              <svg viewBox="0 0 24 24" aria-hidden="true">
+                <path d="m18 2 4 4-12 12-5 1 1-5L18 2Z"></path>
+                <path d="m14 6 4 4"></path>
+              </svg>
+            </button>
+            <div class="color-swatches tool-options" id="colorSwatches" role="group" aria-label="ペンの色">
+              <button class="swatch active" type="button" data-color="#202124" style="--swatch: #202124" title="黒" aria-label="黒" aria-pressed="true"></button>
+              <button class="swatch" type="button" data-color="#1f6feb" style="--swatch: #1f6feb" title="青" aria-label="青" aria-pressed="false"></button>
+              <button class="swatch" type="button" data-color="#d23f31" style="--swatch: #d23f31" title="赤" aria-label="赤" aria-pressed="false"></button>
+            </div>
+          </div>
+          <div class="tool-cluster eraser-tool-cluster normal-selected" id="eraserToolCluster">
+            <button class="icon-button tool-button" id="eraserButton" type="button" title="消しゴム" aria-label="消しゴム" aria-pressed="false">
+              <svg viewBox="0 0 24 24" aria-hidden="true">
+                <path d="m7 21-5-5L14 4a3 3 0 0 1 4 0l2 2a3 3 0 0 1 0 4L9 21H7Z"></path>
+                <path d="m12 8 6 6"></path>
+                <path d="M3 21h18"></path>
+              </svg>
+            </button>
+            <button class="icon-button tool-button eraser-mode-button" id="eraserModeButton" type="button" title="通常の消しゴム" aria-label="通常の消しゴム" aria-pressed="false" hidden>
+              <svg viewBox="0 0 24 24" aria-hidden="true">
+                <path d="m7 21-5-5L14 4a3 3 0 0 1 4 0l2 2a3 3 0 0 1 0 4L9 21H7Z"></path>
+                <path d="m12 8 6 6"></path>
+                <path d="M3 21h18"></path>
+              </svg>
+            </button>
+          </div>
+          <button class="icon-button tool-button" id="pencilModeButton" type="button" title="Pencilモード" aria-label="Pencilモード" aria-pressed="true">
             <svg viewBox="0 0 24 24" aria-hidden="true">
               <path d="m18 2 4 4-13 13-4 1 1-4L18 2Z"></path>
               <path d="m13 7 4 4"></path>
@@ -96,12 +104,6 @@
               <path d="M3 12c1.2-1.3 2.7-1.3 4 0"></path>
             </svg>
           </button>
-
-          <div class="color-swatches" role="group" aria-label="ペンの色">
-            <button class="swatch active" type="button" data-color="#202124" style="--swatch: #202124" title="黒" aria-label="黒" aria-pressed="true"></button>
-            <button class="swatch" type="button" data-color="#1f6feb" style="--swatch: #1f6feb" title="青" aria-label="青" aria-pressed="false"></button>
-            <button class="swatch" type="button" data-color="#d23f31" style="--swatch: #d23f31" title="赤" aria-label="赤" aria-pressed="false"></button>
-          </div>
 
           <button class="icon-button danger" id="deletePageButton" type="button" title="選択ページ削除" aria-label="選択ページ削除">
             <svg viewBox="0 0 24 24" aria-hidden="true">
