@@ -1,6 +1,11 @@
 const storageKey = "noteapp.web.handwritten.v1";
 const legacyStorageKey = "noteapp.web.notes.v1";
 const selectedKey = "noteapp.web.handwritten.selected.v1";
+const databaseName = "noteapp.web.handwritten.db";
+const databaseVersion = 1;
+const noteStoreName = "notes";
+const metaStoreName = "meta";
+const selectedMetaKey = "selectedId";
 
 const paperSizes = {
   a4: { label: "A4", width: 1400, height: 1980 }
@@ -48,8 +53,9 @@ const pageStackResizeObserver = typeof ResizeObserver === "function"
 const pageAnalysisCanvas = document.createElement("canvas");
 const pageAnalysisContext = pageAnalysisCanvas.getContext("2d", { willReadFrequently: true });
 
-let notes = loadNotes();
-let selectedId = localStorage.getItem(selectedKey);
+let notes = [];
+let selectedId = null;
+let databasePromise = null;
 let saveTimer = null;
 let currentStroke = null;
 let activeTool = "pen";
@@ -63,16 +69,13 @@ let pencilModeActive = true;
 let touchScrollGesture = null;
 let deferredInstallPrompt = null;
 let appInstalled = isAppInstalled();
+let storageReady = false;
 
 const minCanvasZoom = 0.5;
 const maxCanvasZoom = 2;
 const canvasZoomStep = 0.25;
 
-if (!notes.some((note) => note.id === selectedId)) {
-  selectedId = notes[0]?.id ?? null;
-}
-
-render();
+initializeApp();
 
 pageStackResizeObserver?.observe(elements.pageStack);
 elements.canvasShell.addEventListener("scroll", scheduleVisiblePageSelection, { passive: true });
@@ -212,6 +215,35 @@ if ("serviceWorker" in navigator && window.location.protocol !== "file:") {
   });
 }
 
+async function initializeApp() {
+  try {
+    const indexedState = await loadIndexedState();
+    const legacyState = loadLegacyState();
+    const shouldMigrateLegacy = indexedState.notes.length === 0 && legacyState.notes.length > 0;
+
+    if (shouldMigrateLegacy) {
+      notes = legacyState.notes;
+      selectedId = legacyState.selectedId;
+      ensureSelectedNote();
+      await writeIndexedState();
+      clearLegacyState();
+    } else {
+      notes = indexedState.notes;
+      selectedId = indexedState.selectedId;
+      ensureSelectedNote();
+    }
+  } catch (error) {
+    console.error("IndexedDB initialization failed:", error);
+    const legacyState = loadLegacyState();
+    notes = legacyState.notes;
+    selectedId = legacyState.selectedId;
+    ensureSelectedNote();
+  } finally {
+    storageReady = true;
+    render();
+  }
+}
+
 function createNote() {
   const now = new Date().toISOString();
   const firstPage = createPage();
@@ -247,13 +279,107 @@ function clearHistory() {
   redoStack = [];
 }
 
-function loadNotes() {
+function openNoteDatabase() {
+  if (!databasePromise) {
+    databasePromise = new Promise((resolve, reject) => {
+      const request = indexedDB.open(databaseName, databaseVersion);
+
+      request.onupgradeneeded = () => {
+        const database = request.result;
+        if (!database.objectStoreNames.contains(noteStoreName)) {
+          database.createObjectStore(noteStoreName, { keyPath: "id" });
+        }
+
+        if (!database.objectStoreNames.contains(metaStoreName)) {
+          database.createObjectStore(metaStoreName, { keyPath: "key" });
+        }
+      };
+
+      request.onsuccess = () => {
+        resolve(request.result);
+      };
+      request.onerror = () => {
+        reject(request.error);
+      };
+    });
+  }
+
+  return databasePromise;
+}
+
+async function loadIndexedState() {
+  const database = await openNoteDatabase();
+  const [savedNotes, selectedMeta] = await Promise.all([
+    getAllFromStore(database, noteStoreName),
+    getFromStore(database, metaStoreName, selectedMetaKey)
+  ]);
+
+  return {
+    notes: savedNotes.map(normalizeNote).filter(Boolean),
+    selectedId: typeof selectedMeta?.value === "string" ? selectedMeta.value : null
+  };
+}
+
+async function writeIndexedState() {
+  const database = await openNoteDatabase();
+
+  return new Promise((resolve, reject) => {
+    const transaction = database.transaction([noteStoreName, metaStoreName], "readwrite");
+    const noteStore = transaction.objectStore(noteStoreName);
+    const metaStore = transaction.objectStore(metaStoreName);
+
+    noteStore.clear();
+    for (const note of notes) {
+      noteStore.put(note);
+    }
+
+    metaStore.put({ key: selectedMetaKey, value: selectedId });
+    transaction.oncomplete = () => {
+      resolve();
+    };
+    transaction.onerror = () => {
+      reject(transaction.error);
+    };
+    transaction.onabort = () => {
+      reject(transaction.error);
+    };
+  });
+}
+
+function getAllFromStore(database, storeName) {
+  return new Promise((resolve, reject) => {
+    const request = database.transaction(storeName, "readonly").objectStore(storeName).getAll();
+    request.onsuccess = () => {
+      resolve(Array.isArray(request.result) ? request.result : []);
+    };
+    request.onerror = () => {
+      reject(request.error);
+    };
+  });
+}
+
+function getFromStore(database, storeName, key) {
+  return new Promise((resolve, reject) => {
+    const request = database.transaction(storeName, "readonly").objectStore(storeName).get(key);
+    request.onsuccess = () => {
+      resolve(request.result ?? null);
+    };
+    request.onerror = () => {
+      reject(request.error);
+    };
+  });
+}
+
+function loadLegacyState() {
   try {
     const raw = localStorage.getItem(storageKey);
     if (raw) {
       const parsed = JSON.parse(raw);
       if (Array.isArray(parsed)) {
-        return parsed.map(normalizeNote).filter(Boolean);
+        return {
+          notes: parsed.map(normalizeNote).filter(Boolean),
+          selectedId: localStorage.getItem(selectedKey)
+        };
       }
     }
 
@@ -261,16 +387,31 @@ function loadNotes() {
     if (legacyRaw) {
       const parsedLegacy = JSON.parse(legacyRaw);
       if (Array.isArray(parsedLegacy)) {
-        return parsedLegacy.map((note) => normalizeNote({
-          ...note,
-          strokes: []
-        })).filter(Boolean);
+        return {
+          notes: parsedLegacy.map((note) => normalizeNote({
+            ...note,
+            strokes: []
+          })).filter(Boolean),
+          selectedId: localStorage.getItem(selectedKey)
+        };
       }
     }
 
-    return [];
+    return { notes: [], selectedId: null };
   } catch {
-    return [];
+    return { notes: [], selectedId: null };
+  }
+}
+
+function clearLegacyState() {
+  localStorage.removeItem(storageKey);
+  localStorage.removeItem(legacyStorageKey);
+  localStorage.removeItem(selectedKey);
+}
+
+function ensureSelectedNote() {
+  if (!notes.some((note) => note.id === selectedId)) {
+    selectedId = notes[0]?.id ?? null;
   }
 }
 
@@ -417,21 +558,25 @@ function sortNotes(items) {
 }
 
 function persistSoon() {
+  if (!storageReady) {
+    return;
+  }
+
   updateSaveState();
   window.clearTimeout(saveTimer);
   saveTimer = window.setTimeout(() => {
-    persistNow();
-    updateSaveState();
+    persistNow().finally(updateSaveState);
   }, 250);
 }
 
 function persistNow() {
-  localStorage.setItem(storageKey, JSON.stringify(notes));
-  if (selectedId) {
-    localStorage.setItem(selectedKey, selectedId);
-  } else {
-    localStorage.removeItem(selectedKey);
+  if (!storageReady) {
+    return Promise.resolve();
   }
+
+  return writeIndexedState().catch((error) => {
+    console.error("IndexedDB save failed:", error);
+  });
 }
 
 function updateSaveState(note = getSelectedNote()) {
