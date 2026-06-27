@@ -1024,10 +1024,11 @@ function updateToolButtons() {
 function updateSelectionControls(lassoActive = activeTool === "lasso") {
   const hasSelection = Boolean(lassoSelection);
   const hasClipboard = Boolean(lassoClipboard?.strokes.length);
+  const enabled = lassoActive && currentView === "editor" && Boolean(getSelectedNote());
 
-  elements.selectionActions.hidden = !lassoActive || (!hasSelection && !hasClipboard);
-  elements.copySelectionButton.disabled = !hasSelection;
-  elements.pasteSelectionButton.disabled = !hasClipboard;
+  elements.selectionActions.hidden = !lassoActive;
+  elements.copySelectionButton.disabled = !enabled || !hasSelection;
+  elements.pasteSelectionButton.disabled = !enabled || !hasClipboard;
 }
 
 function updateSwatches() {
@@ -1191,7 +1192,7 @@ function redoAction(note, action) {
     }
 
     note.selectedPageId = page.id;
-    page.strokes.push(action.stroke);
+    page.strokes.push(cloneStroke(action.stroke));
     return true;
   }
 
@@ -1262,7 +1263,7 @@ function findStrokeIndex(page, stroke) {
 function restoreDeletedStrokes(page, deletedStrokes) {
   const sortedStrokes = [...deletedStrokes].sort((a, b) => a.index - b.index);
   for (const item of sortedStrokes) {
-    page.strokes.splice(clamp(item.index, 0, page.strokes.length), 0, item.stroke);
+    page.strokes.splice(clamp(item.index, 0, page.strokes.length), 0, cloneStroke(item.stroke));
   }
 }
 
@@ -1925,7 +1926,7 @@ function finishStroke(event) {
       type: "add-stroke",
       pageId: page.id,
       pageIndex,
-      stroke: strokeAction.stroke
+      stroke: cloneStroke(strokeAction.stroke)
     });
     persistSoon();
   }
@@ -2152,7 +2153,7 @@ function copyLassoSelection() {
 function pasteLassoSelection() {
   const note = getSelectedNote();
   const page = getSelectedPage(note);
-  if (!note || !page || !lassoClipboard?.strokes.length) {
+  if (activeTool !== "lasso" || !note || !page || !lassoClipboard?.strokes.length) {
     return;
   }
 
@@ -2168,6 +2169,10 @@ function pasteLassoSelection() {
   const inserted = pastedStrokes.map((stroke, offset) => ({
     index: insertionIndex + offset,
     stroke
+  }));
+  const insertedAction = inserted.map((item) => ({
+    index: item.index,
+    stroke: cloneStroke(item.stroke)
   }));
 
   page.strokes.push(...pastedStrokes);
@@ -2185,7 +2190,7 @@ function pasteLassoSelection() {
     type: "paste-strokes",
     pageId: page.id,
     pageIndex,
-    inserted
+    inserted: insertedAction
   });
   persistSoon();
   render();
