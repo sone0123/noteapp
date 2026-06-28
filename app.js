@@ -26,6 +26,12 @@ const notebookRuleColor = "rgba(85, 142, 170, 0.36)";
 const notebookDotColor = "rgba(85, 142, 170, 0.28)";
 const fixedStrokeWidth = 2.2;
 const fixedEraserStrokeWidth = 7.5;
+const laserPointerRadius = 17;
+const laserPointerCoreRadius = 4.2;
+const twoFingerTapPairWindow = 120;
+const twoFingerTapMaxDuration = 260;
+const twoFingerTapMaxMove = 24;
+const twoFingerDoubleTapWindow = 420;
 const lassoPasteOffset = 48;
 const lassoPointSpacing = 3;
 const lassoMinimumPoints = 3;
@@ -53,6 +59,7 @@ const elements = {
   selectionActions: document.querySelector("#selectionActions"),
   copySelectionButton: document.querySelector("#copySelectionButton"),
   pasteSelectionButton: document.querySelector("#pasteSelectionButton"),
+  laserButton: document.querySelector("#laserButton"),
   pencilModeButton: document.querySelector("#pencilModeButton"),
   insertPageAboveButton: document.querySelector("#insertPageAboveButton"),
   deletePageButton: document.querySelector("#deletePageButton"),
@@ -96,6 +103,9 @@ let canvasZoom = 1;
 let visiblePageSelectionFrame = null;
 let pencilModeActive = true;
 let touchScrollGesture = null;
+let pencilTouchPointers = new Map();
+let twoFingerTapCandidate = null;
+let lastTwoFingerTapAt = 0;
 let deferredInstallPrompt = null;
 let appInstalled = isAppInstalled();
 let storageReady = false;
@@ -172,10 +182,16 @@ elements.copySelectionButton.addEventListener("click", copyLassoSelection);
 
 elements.pasteSelectionButton.addEventListener("click", pasteLassoSelection);
 
+elements.laserButton.addEventListener("click", () => {
+  activeTool = "laser";
+  clearLassoSelection();
+  updateToolButtons();
+});
+
 elements.pencilModeButton.addEventListener("click", () => {
   pencilModeActive = !pencilModeActive;
   currentStroke = null;
-  touchScrollGesture = null;
+  resetPencilTouchGesture();
   clearTextSelection();
   updateInputMode();
   updateToolButtons();
@@ -255,6 +271,7 @@ function applyIcons() {
     [elements.lassoButton, "lasso"],
     [elements.copySelectionButton, "copy"],
     [elements.pasteSelectionButton, "clipboardPaste"],
+    [elements.laserButton, "laserPointer"],
     [elements.insertPageAboveButton, "filePlus"],
     [elements.deletePageButton, "fileX"],
     [elements.zoomOutButton, "zoomOut"],
@@ -327,6 +344,10 @@ function getLucideIconPaths(iconName) {
     clipboardPaste: `
       <path d="M15 2H9a2 2 0 0 0-2 2v2h10V4a2 2 0 0 0-2-2Z"></path>
       <path d="M8 4H6a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V6a2 2 0 0 0-2-2h-2"></path>
+    `,
+    laserPointer: `
+      <path d="m4 4 7.07 16.97 2.51-7.39 7.39-2.51L4 4Z"></path>
+      <path d="m13.6 13.6 5.8 5.8"></path>
     `,
     pencilMode: `
       <path d="M10 3H8"></path>
@@ -991,6 +1012,7 @@ function updateToolButtons() {
   const eraserActive = activeTool === "eraser";
   const strokeEraserActive = activeTool === "stroke-eraser";
   const lassoActive = activeTool === "lasso";
+  const laserActive = activeTool === "laser";
   const eraserGroupActive = eraserActive || strokeEraserActive;
   const eraserLabel = activeEraserTool === "stroke-eraser"
     ? "ストローク消しゴム"
@@ -1002,6 +1024,7 @@ function updateToolButtons() {
   elements.penButton.classList.toggle("active", penActive);
   elements.eraserButton.classList.toggle("active", eraserGroupActive);
   elements.lassoButton.classList.toggle("active", lassoActive);
+  elements.laserButton.classList.toggle("active", laserActive);
   elements.penToolCluster.classList.toggle("open", penActive);
   elements.eraserToolCluster.classList.toggle("open", eraserGroupActive);
   elements.lassoToolCluster.classList.toggle("open", lassoActive);
@@ -1010,6 +1033,7 @@ function updateToolButtons() {
   elements.penButton.setAttribute("aria-pressed", String(penActive));
   elements.eraserButton.setAttribute("aria-pressed", String(eraserGroupActive));
   elements.lassoButton.setAttribute("aria-pressed", String(lassoActive));
+  elements.laserButton.setAttribute("aria-pressed", String(laserActive));
   elements.eraserModeButton.setAttribute("aria-pressed", "false");
   elements.pencilModeButton.setAttribute("aria-pressed", String(pencilModeActive));
   elements.eraserButton.title = eraserLabel;
@@ -1799,12 +1823,7 @@ function startStroke(event) {
   }
 
   if (event.pointerType === "touch" && pencilModeActive) {
-    if (currentStroke || touchScrollGesture) {
-      preventIgnoredCanvasInput(event);
-      return;
-    }
-
-    beginTouchScroll(event, canvas);
+    handlePencilTouchStart(event, canvas);
     return;
   }
 
@@ -1822,6 +1841,18 @@ function startStroke(event) {
   const point = getCanvasPoint(event, canvas);
   if (activeTool === "lasso") {
     startLassoAction(page, canvas, event.pointerId, point);
+    redrawPage(page.id);
+    return;
+  }
+
+  if (activeTool === "laser") {
+    currentStroke = {
+      type: "laser",
+      pageId: page.id,
+      canvas,
+      pointerId: event.pointerId,
+      points: [point]
+    };
     redrawPage(page.id);
     return;
   }
@@ -1859,6 +1890,10 @@ function startStroke(event) {
 }
 
 function continueStroke(event) {
+  if (event.pointerType === "touch" && pencilModeActive && handlePencilTouchMove(event)) {
+    return;
+  }
+
   if (isTouchScrollPointer(event)) {
     continueTouchScroll(event);
     return;
@@ -1878,6 +1913,11 @@ function continueStroke(event) {
 
   if (currentStroke.type === "move-selection") {
     continueSelectionMove(event);
+    return;
+  }
+
+  if (currentStroke.type === "laser") {
+    continueLaserPointer(event);
     return;
   }
 
@@ -1906,6 +1946,10 @@ function continueStroke(event) {
 }
 
 function finishStroke(event) {
+  if (event.pointerType === "touch" && pencilModeActive && handlePencilTouchEnd(event)) {
+    return;
+  }
+
   if (isTouchScrollPointer(event)) {
     finishTouchScroll(event);
     return;
@@ -1939,6 +1983,11 @@ function finishStroke(event) {
     return;
   }
 
+  if (strokeAction.type === "laser") {
+    redrawPage(strokeAction.pageId);
+    return;
+  }
+
   if (strokeAction.type === "stroke-eraser") {
     finishStrokeErase(strokeAction);
     return;
@@ -1963,6 +2012,10 @@ function finishStroke(event) {
 }
 
 function cancelStroke(event) {
+  if (event.pointerType === "touch" && pencilModeActive && handlePencilTouchEnd(event, true)) {
+    return;
+  }
+
   if (isTouchScrollPointer(event)) {
     finishTouchScroll(event);
     return;
@@ -2002,6 +2055,12 @@ function cancelStroke(event) {
   if (pageId) {
     redrawPage(pageId);
   }
+}
+
+function continueLaserPointer(event) {
+  const point = getCanvasPoint(event, currentStroke.canvas);
+  currentStroke.points = [point];
+  redrawPage(currentStroke.pageId);
 }
 
 function startLassoAction(page, canvas, pointerId, point) {
@@ -2561,6 +2620,164 @@ function canUsePointerForDrawing(event) {
   return event.pointerType !== "touch" || !pencilModeActive;
 }
 
+function handlePencilTouchStart(event, canvas) {
+  preventIgnoredCanvasInput(event);
+
+  if (currentStroke) {
+    return true;
+  }
+
+  const now = getEventTimestamp(event);
+  pencilTouchPointers.set(event.pointerId, {
+    pointerId: event.pointerId,
+    canvas,
+    startX: event.clientX,
+    startY: event.clientY,
+    lastX: event.clientX,
+    lastY: event.clientY,
+    startTime: now,
+    moved: false
+  });
+
+  if (!canvas.hasPointerCapture(event.pointerId)) {
+    canvas.setPointerCapture(event.pointerId);
+  }
+
+  if (pencilTouchPointers.size === 1) {
+    beginTouchScroll(event, canvas);
+    return true;
+  }
+
+  if (pencilTouchPointers.size === 2) {
+    stopTouchScrollGesture();
+    const pointers = [...pencilTouchPointers.values()];
+    const pairStartGap = Math.abs(pointers[0].startTime - pointers[1].startTime);
+    twoFingerTapCandidate = {
+      pointerIds: new Set(pointers.map((pointer) => pointer.pointerId)),
+      startTime: Math.min(...pointers.map((pointer) => pointer.startTime)),
+      valid: pairStartGap <= twoFingerTapPairWindow
+        && pointers.every((pointer) => !pointer.moved && pointer.canvas === canvas)
+    };
+    return true;
+  }
+
+  stopTouchScrollGesture();
+  if (twoFingerTapCandidate) {
+    twoFingerTapCandidate.valid = false;
+  }
+  return true;
+}
+
+function handlePencilTouchMove(event) {
+  const pointer = pencilTouchPointers.get(event.pointerId);
+  if (!pointer) {
+    return false;
+  }
+
+  event.preventDefault();
+  updatePencilTouchPointer(pointer, event);
+
+  if (twoFingerTapCandidate?.pointerIds.has(event.pointerId) && pointer.moved) {
+    twoFingerTapCandidate.valid = false;
+  }
+
+  if (!twoFingerTapCandidate && isTouchScrollPointer(event)) {
+    continueTouchScroll(event);
+  }
+
+  return true;
+}
+
+function handlePencilTouchEnd(event, cancelled = false) {
+  const pointer = pencilTouchPointers.get(event.pointerId);
+  if (!pointer) {
+    return false;
+  }
+
+  event.preventDefault();
+  updatePencilTouchPointer(pointer, event);
+  releasePointerCapture(pointer.canvas, event.pointerId);
+
+  if (touchScrollGesture?.pointerId === event.pointerId) {
+    touchScrollGesture = null;
+  }
+
+  pencilTouchPointers.delete(event.pointerId);
+
+  if (twoFingerTapCandidate?.pointerIds.has(event.pointerId)) {
+    if (cancelled || pointer.moved || getEventTimestamp(event) - pointer.startTime > twoFingerTapMaxDuration) {
+      twoFingerTapCandidate.valid = false;
+    }
+
+    const candidateEnded = [...twoFingerTapCandidate.pointerIds]
+      .every((pointerId) => !pencilTouchPointers.has(pointerId));
+    if (candidateEnded) {
+      finishTwoFingerTapCandidate(event);
+    }
+  }
+
+  if (pencilTouchPointers.size === 0 && !twoFingerTapCandidate) {
+    touchScrollGesture = null;
+  }
+
+  return true;
+}
+
+function updatePencilTouchPointer(pointer, event) {
+  pointer.lastX = event.clientX;
+  pointer.lastY = event.clientY;
+
+  if (getPointerMoveDistance(pointer, event) > twoFingerTapMaxMove) {
+    pointer.moved = true;
+  }
+}
+
+function getPointerMoveDistance(pointer, event) {
+  return Math.hypot(event.clientX - pointer.startX, event.clientY - pointer.startY);
+}
+
+function finishTwoFingerTapCandidate(event) {
+  const candidate = twoFingerTapCandidate;
+  twoFingerTapCandidate = null;
+
+  if (!candidate?.valid || getEventTimestamp(event) - candidate.startTime > twoFingerTapMaxDuration) {
+    return;
+  }
+
+  const now = getEventTimestamp(event);
+  if (now - lastTwoFingerTapAt <= twoFingerDoubleTapWindow) {
+    lastTwoFingerTapAt = 0;
+    undoLastAction();
+    return;
+  }
+
+  lastTwoFingerTapAt = now;
+}
+
+function stopTouchScrollGesture() {
+  touchScrollGesture = null;
+}
+
+function resetPencilTouchGesture() {
+  for (const pointer of pencilTouchPointers.values()) {
+    releasePointerCapture(pointer.canvas, pointer.pointerId);
+  }
+
+  pencilTouchPointers.clear();
+  twoFingerTapCandidate = null;
+  touchScrollGesture = null;
+}
+
+function releasePointerCapture(canvas, pointerId) {
+  if (canvas?.hasPointerCapture(pointerId)) {
+    canvas.releasePointerCapture(pointerId);
+  }
+}
+
+function getEventTimestamp(event) {
+  return typeof event.timeStamp === "number" ? event.timeStamp : performance.now();
+}
+
 function beginTouchScroll(event, canvas) {
   event.preventDefault();
   clearEditorSelectionInPencilMode();
@@ -2872,6 +3089,10 @@ function redrawPage(pageId) {
   if (lassoSelection?.pageId === pageId) {
     drawLassoSelection(lassoSelection, context);
   }
+
+  if (currentStroke?.type === "laser" && currentStroke.pageId === pageId) {
+    drawLaserPointer(currentStroke.points, context);
+  }
 }
 
 function updatePaperPatterns() {
@@ -2952,6 +3173,30 @@ function drawFixedWidthStroke(stroke, targetContext, lineWidth) {
   }
 
   targetContext.stroke();
+}
+
+function drawLaserPointer(points, targetContext) {
+  if (points.length === 0) {
+    return;
+  }
+
+  targetContext.save();
+  targetContext.globalCompositeOperation = "source-over";
+
+  const point = points[points.length - 1];
+  targetContext.fillStyle = "rgba(224, 42, 42, 0.22)";
+  targetContext.shadowColor = "rgba(224, 42, 42, 0.75)";
+  targetContext.shadowBlur = laserPointerRadius * 0.8;
+  targetContext.beginPath();
+  targetContext.arc(point.x, point.y, laserPointerRadius, 0, Math.PI * 2);
+  targetContext.fill();
+
+  targetContext.shadowBlur = 0;
+  targetContext.fillStyle = "rgba(224, 42, 42, 0.92)";
+  targetContext.beginPath();
+  targetContext.arc(point.x, point.y, laserPointerCoreRadius, 0, Math.PI * 2);
+  targetContext.fill();
+  targetContext.restore();
 }
 
 function drawLassoSelection(selection, targetContext) {

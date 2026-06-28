@@ -600,6 +600,10 @@ button {
   cursor: default;
 }
 
+.page-stack[data-tool="laser"] .drawing-canvas {
+  cursor: pointer;
+}
+
 .drawing-canvas[data-background="lined"] {
   background-image:
     linear-gradient(
