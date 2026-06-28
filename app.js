@@ -40,7 +40,6 @@ const elements = {
   newNoteButton: document.querySelector("#newNoteButton"),
   installAppButton: document.querySelector("#installAppButton"),
   backToListButton: document.querySelector("#backToListButton"),
-  clearCanvasButton: document.querySelector("#clearCanvasButton"),
   undoButton: document.querySelector("#undoButton"),
   redoButton: document.querySelector("#redoButton"),
   exportPdfButton: document.querySelector("#exportPdfButton"),
@@ -55,6 +54,7 @@ const elements = {
   copySelectionButton: document.querySelector("#copySelectionButton"),
   pasteSelectionButton: document.querySelector("#pasteSelectionButton"),
   pencilModeButton: document.querySelector("#pencilModeButton"),
+  insertPageAboveButton: document.querySelector("#insertPageAboveButton"),
   deletePageButton: document.querySelector("#deletePageButton"),
   pageState: document.querySelector("#pageState"),
   zoomOutButton: document.querySelector("#zoomOutButton"),
@@ -138,28 +138,6 @@ elements.backToListButton.addEventListener("click", () => {
   render();
 });
 
-elements.clearCanvasButton.addEventListener("click", () => {
-  const note = getSelectedNote();
-  const page = getSelectedPage(note);
-  if (!note || !page || page.strokes.length === 0) {
-    return;
-  }
-
-  const shouldClear = window.confirm("このページを消去しますか？");
-  if (!shouldClear) {
-    return;
-  }
-
-  page.strokes = [];
-  normalizeAutoPages(note);
-  note.updatedAt = new Date().toISOString();
-  currentStroke = null;
-  clearLassoSelection();
-  clearHistory();
-  persistSoon();
-  render();
-});
-
 elements.undoButton.addEventListener("click", undoLastAction);
 
 elements.redoButton.addEventListener("click", redoLastAction);
@@ -202,6 +180,8 @@ elements.pencilModeButton.addEventListener("click", () => {
   updateInputMode();
   updateToolButtons();
 });
+
+elements.insertPageAboveButton.addEventListener("click", insertPageAboveCurrent);
 
 elements.deletePageButton.addEventListener("click", deleteCurrentPage);
 
@@ -275,13 +255,13 @@ function applyIcons() {
     [elements.lassoButton, "lasso"],
     [elements.copySelectionButton, "copy"],
     [elements.pasteSelectionButton, "clipboardPaste"],
+    [elements.insertPageAboveButton, "filePlus"],
     [elements.deletePageButton, "fileX"],
     [elements.zoomOutButton, "zoomOut"],
     [elements.zoomInButton, "zoomIn"],
     [elements.undoButton, "undo"],
     [elements.redoButton, "redo"],
-    [elements.exportPdfButton, "fileDown"],
-    [elements.clearCanvasButton, "trash"]
+    [elements.exportPdfButton, "fileDown"]
   ];
 
   for (const [button, iconName] of iconTargets) {
@@ -369,6 +349,12 @@ function getLucideIconPaths(iconName) {
       <polyline points="14 2 14 8 20 8"></polyline>
       <path d="m10 13 4 4"></path>
       <path d="m14 13-4 4"></path>
+    `,
+    filePlus: `
+      <path d="M14.5 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7.5Z"></path>
+      <polyline points="14 2 14 8 20 8"></polyline>
+      <path d="M12 18v-6"></path>
+      <path d="M9 15h6"></path>
     `,
     zoomOut: `
       <circle cx="11" cy="11" r="8"></circle>
@@ -469,11 +455,17 @@ function createNote() {
   };
 }
 
-function createPage(strokes = []) {
-  return {
+function createPage(strokes = [], manual = false) {
+  const page = {
     id: makeId(),
     strokes
   };
+
+  if (manual) {
+    page.manual = true;
+  }
+
+  return page;
 }
 
 function makeId() {
@@ -660,10 +652,16 @@ function normalizePage(page) {
     return null;
   }
 
-  return {
+  const normalizedPage = {
     id: typeof page.id === "string" ? page.id : makeId(),
     strokes: Array.isArray(page.strokes) ? page.strokes.filter(isValidStroke) : []
   };
+
+  if (page.manual === true) {
+    normalizedPage.manual = true;
+  }
+
+  return normalizedPage;
 }
 
 function normalizeAutoPages(note, preferredPageId = note?.selectedPageId) {
@@ -677,8 +675,9 @@ function normalizeAutoPages(note, preferredPageId = note?.selectedPageId) {
 
   while (
     note.pages.length > 1
-    && !hasPageDrawing(note.pages[note.pages.length - 1])
+    && isRemovableAutoBlankPage(note.pages[note.pages.length - 1], preferredPageId)
     && !hasPageDrawing(note.pages[note.pages.length - 2])
+    && note.pages[note.pages.length - 2].manual !== true
   ) {
     note.pages.pop();
   }
@@ -694,6 +693,13 @@ function normalizeAutoPages(note, preferredPageId = note?.selectedPageId) {
   }
 
   return note;
+}
+
+function isRemovableAutoBlankPage(page, preferredPageId) {
+  return page
+    && page.id !== preferredPageId
+    && page.manual !== true
+    && !hasPageDrawing(page);
 }
 
 function hasPageDrawing(page) {
@@ -875,10 +881,8 @@ function getManualInstallMessage() {
 function renderEditor() {
   const note = getSelectedNote();
   const hasNote = Boolean(note);
-  const page = getSelectedPage(note);
 
   elements.titleInput.disabled = !hasNote;
-  elements.clearCanvasButton.disabled = !hasNote || !page || page.strokes.length === 0;
   elements.titleInput.value = note?.title ?? "";
   renderPageStack(note);
 }
@@ -1051,9 +1055,11 @@ function updatePageControls() {
     && page
     && pageIndex === pageCount - 1
     && !hasPageDrawing(page)
+    && page.manual !== true
   );
 
   elements.pageState.textContent = pageCount > 0 ? `${pageNumber} / ${pageCount}` : "0 / 0";
+  elements.insertPageAboveButton.disabled = !note || pageIndex < 0;
   elements.deletePageButton.disabled = !note || pageCount <= 1 || selectedPageIsAutoBlank;
   updatePageSelection();
 }
@@ -1072,7 +1078,6 @@ function updateActionButtons() {
   elements.undoButton.disabled = !note || (!hasFallbackUndo && undoStack.length === 0);
   elements.redoButton.disabled = redoStack.length === 0;
   elements.exportPdfButton.disabled = !note;
-  elements.clearCanvasButton.disabled = !note || !page || page.strokes.length === 0;
 }
 
 function undoLastAction() {
@@ -1733,6 +1738,27 @@ function selectMostlyVisiblePage() {
     updatePageControls();
     updateActionButtons();
   }
+}
+
+function insertPageAboveCurrent() {
+  const note = getSelectedNote();
+  const pageIndex = getSelectedPageIndex(note);
+  if (!note || pageIndex < 0) {
+    return;
+  }
+
+  const page = createPage([], true);
+  note.pages.splice(pageIndex, 0, page);
+  note.selectedPageId = page.id;
+  normalizeAutoPages(note, page.id);
+  note.updatedAt = new Date().toISOString();
+  currentStroke = null;
+  clearLassoSelection(false);
+  clearHistory();
+  notes = sortNotes(notes);
+  persistSoon();
+  render();
+  focusSelectedPage();
 }
 
 function deleteCurrentPage() {
