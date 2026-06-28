@@ -44,6 +44,7 @@
           </svg>
           <input id="searchInput" type="search" placeholder="検索" autocomplete="off">
         </label>
+        <div class="tag-filter-bar" id="tagFilterBar" aria-label="タグフィルター" hidden></div>
 
         <div class="note-list" id="noteList" role="list"></div>
       </section>
@@ -122,12 +123,27 @@
               </button>
             </div>
           </div>
+          <button class="icon-button tool-button" id="laserButton" type="button" title="レーザーポインター" aria-label="レーザーポインター" aria-pressed="false">
+            <svg viewBox="0 0 24 24" aria-hidden="true">
+              <path d="m4 4 7.1 17 2.4-7.5L21 11.1 4 4Z"></path>
+              <path d="M14 14 20 20"></path>
+            </svg>
+          </button>
           <button class="icon-button tool-button" id="pencilModeButton" type="button" title="Pencilモード" aria-label="Pencilモード" aria-pressed="true">
             <svg viewBox="0 0 24 24" aria-hidden="true">
               <path d="m18 2 4 4-13 13-4 1 1-4L18 2Z"></path>
               <path d="m13 7 4 4"></path>
               <path d="M3 22h18"></path>
               <path d="M3 12c1.2-1.3 2.7-1.3 4 0"></path>
+            </svg>
+          </button>
+
+          <button class="icon-button" id="insertPageAboveButton" type="button" title="現在ページの上にページを追加" aria-label="現在ページの上にページを追加">
+            <svg viewBox="0 0 24 24" aria-hidden="true">
+              <path d="M14.5 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7.5Z"></path>
+              <path d="M14 2v6h6"></path>
+              <path d="M12 18v-6"></path>
+              <path d="M9 15h6"></path>
             </svg>
           </button>
 
@@ -178,13 +194,6 @@
               <path d="M14 2v6h6"></path>
               <path d="M12 18v-6"></path>
               <path d="m9 15 3 3 3-3"></path>
-            </svg>
-          </button>
-          <button class="icon-button" id="clearCanvasButton" type="button" title="ページを消去" aria-label="ページを消去">
-            <svg viewBox="0 0 24 24" aria-hidden="true">
-              <path d="M3 6h18"></path>
-              <path d="M8 6V4h8v2"></path>
-              <path d="m6 6 1 15h10l1-15"></path>
             </svg>
           </button>
         </div>

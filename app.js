@@ -24,12 +24,16 @@ const notebookDotRadius = 2.4;
 const notebookPaperColor = "#fffefa";
 const notebookRuleColor = "rgba(85, 142, 170, 0.36)";
 const notebookDotColor = "rgba(85, 142, 170, 0.28)";
-const fixedStrokeWidth = 2.5;
-const fountainPenMinScale = 0.42;
-const fountainPenMaxScale = 1.24;
-const fountainPenSpeedReference = 24;
-const fountainPenTaperPoints = 4;
-const fountainPenFallbackPressure = 0.55;
+const fixedStrokeWidth = 2.2;
+const fixedEraserStrokeWidth = 7.5;
+const laserPointerRadius = 17;
+const laserPointerCoreRadius = 4.2;
+const twoFingerTapPairWindow = 120;
+const twoFingerTapMaxDuration = 260;
+const twoFingerTapMaxMove = 24;
+const twoFingerDoubleTapWindow = 420;
+const maxTagsPerNote = 8;
+const maxTagLength = 24;
 const lassoPasteOffset = 48;
 const lassoPointSpacing = 3;
 const lassoMinimumPoints = 3;
@@ -44,7 +48,6 @@ const elements = {
   newNoteButton: document.querySelector("#newNoteButton"),
   installAppButton: document.querySelector("#installAppButton"),
   backToListButton: document.querySelector("#backToListButton"),
-  clearCanvasButton: document.querySelector("#clearCanvasButton"),
   undoButton: document.querySelector("#undoButton"),
   redoButton: document.querySelector("#redoButton"),
   exportPdfButton: document.querySelector("#exportPdfButton"),
@@ -58,7 +61,9 @@ const elements = {
   selectionActions: document.querySelector("#selectionActions"),
   copySelectionButton: document.querySelector("#copySelectionButton"),
   pasteSelectionButton: document.querySelector("#pasteSelectionButton"),
+  laserButton: document.querySelector("#laserButton"),
   pencilModeButton: document.querySelector("#pencilModeButton"),
+  insertPageAboveButton: document.querySelector("#insertPageAboveButton"),
   deletePageButton: document.querySelector("#deletePageButton"),
   pageState: document.querySelector("#pageState"),
   zoomOutButton: document.querySelector("#zoomOutButton"),
@@ -68,6 +73,7 @@ const elements = {
   colorSwatches: document.querySelector("#colorSwatches"),
   swatches: [...document.querySelectorAll(".swatch")],
   searchInput: document.querySelector("#searchInput"),
+  tagFilterBar: document.querySelector("#tagFilterBar"),
   noteList: document.querySelector("#noteList"),
   titleInput: document.querySelector("#titleInput"),
   canvasShell: document.querySelector(".canvas-shell"),
@@ -91,6 +97,7 @@ let currentStroke = null;
 let activeTool = "pen";
 let activeEraserTool = "eraser";
 let activeColor = "#202124";
+let activeTagFilter = null;
 let lassoSelection = null;
 let lassoClipboard = null;
 let undoStack = [];
@@ -100,6 +107,9 @@ let canvasZoom = 1;
 let visiblePageSelectionFrame = null;
 let pencilModeActive = true;
 let touchScrollGesture = null;
+let pencilTouchPointers = new Map();
+let twoFingerTapCandidate = null;
+let lastTwoFingerTapAt = 0;
 let deferredInstallPrompt = null;
 let appInstalled = isAppInstalled();
 let storageReady = false;
@@ -142,28 +152,6 @@ elements.backToListButton.addEventListener("click", () => {
   render();
 });
 
-elements.clearCanvasButton.addEventListener("click", () => {
-  const note = getSelectedNote();
-  const page = getSelectedPage(note);
-  if (!note || !page || page.strokes.length === 0) {
-    return;
-  }
-
-  const shouldClear = window.confirm("このページを消去しますか？");
-  if (!shouldClear) {
-    return;
-  }
-
-  page.strokes = [];
-  normalizeAutoPages(note);
-  note.updatedAt = new Date().toISOString();
-  currentStroke = null;
-  clearLassoSelection();
-  clearHistory();
-  persistSoon();
-  render();
-});
-
 elements.undoButton.addEventListener("click", undoLastAction);
 
 elements.redoButton.addEventListener("click", redoLastAction);
@@ -198,14 +186,22 @@ elements.copySelectionButton.addEventListener("click", copyLassoSelection);
 
 elements.pasteSelectionButton.addEventListener("click", pasteLassoSelection);
 
+elements.laserButton.addEventListener("click", () => {
+  activeTool = "laser";
+  clearLassoSelection();
+  updateToolButtons();
+});
+
 elements.pencilModeButton.addEventListener("click", () => {
   pencilModeActive = !pencilModeActive;
   currentStroke = null;
-  touchScrollGesture = null;
+  resetPencilTouchGesture();
   clearTextSelection();
   updateInputMode();
   updateToolButtons();
 });
+
+elements.insertPageAboveButton.addEventListener("click", insertPageAboveCurrent);
 
 elements.deletePageButton.addEventListener("click", deleteCurrentPage);
 
@@ -241,10 +237,10 @@ elements.titleInput.addEventListener("input", () => {
     return;
   }
 
-  note.title = elements.titleInput.value;
-  note.updatedAt = new Date().toISOString();
-  persistSoon();
-  renderList();
+  updateNoteTitle(note.id, elements.titleInput.value, {
+    renderListAfter: true,
+    syncEditorInput: false
+  });
 });
 
 window.addEventListener("beforeunload", persistNow);
@@ -279,13 +275,14 @@ function applyIcons() {
     [elements.lassoButton, "lasso"],
     [elements.copySelectionButton, "copy"],
     [elements.pasteSelectionButton, "clipboardPaste"],
+    [elements.laserButton, "laserPointer"],
+    [elements.insertPageAboveButton, "filePlus"],
     [elements.deletePageButton, "fileX"],
     [elements.zoomOutButton, "zoomOut"],
     [elements.zoomInButton, "zoomIn"],
     [elements.undoButton, "undo"],
     [elements.redoButton, "redo"],
-    [elements.exportPdfButton, "fileDown"],
-    [elements.clearCanvasButton, "trash"]
+    [elements.exportPdfButton, "fileDown"]
   ];
 
   for (const [button, iconName] of iconTargets) {
@@ -352,6 +349,14 @@ function getLucideIconPaths(iconName) {
       <path d="M15 2H9a2 2 0 0 0-2 2v2h10V4a2 2 0 0 0-2-2Z"></path>
       <path d="M8 4H6a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V6a2 2 0 0 0-2-2h-2"></path>
     `,
+    tag: `
+      <path d="M12.586 2.586A2 2 0 0 0 11.172 2H4a2 2 0 0 0-2 2v7.172a2 2 0 0 0 .586 1.414l8.704 8.704a2.426 2.426 0 0 0 3.432 0l6.568-6.568a2.426 2.426 0 0 0 0-3.432z"></path>
+      <circle cx="7.5" cy="7.5" r=".5" fill="currentColor"></circle>
+    `,
+    laserPointer: `
+      <path d="m4 4 7.07 16.97 2.51-7.39 7.39-2.51L4 4Z"></path>
+      <path d="m13.6 13.6 5.8 5.8"></path>
+    `,
     pencilMode: `
       <path d="M10 3H8"></path>
       <path d="m15.007 5.008 3.987 3.986"></path>
@@ -373,6 +378,12 @@ function getLucideIconPaths(iconName) {
       <polyline points="14 2 14 8 20 8"></polyline>
       <path d="m10 13 4 4"></path>
       <path d="m14 13-4 4"></path>
+    `,
+    filePlus: `
+      <path d="M14.5 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7.5Z"></path>
+      <polyline points="14 2 14 8 20 8"></polyline>
+      <path d="M12 18v-6"></path>
+      <path d="M9 15h6"></path>
     `,
     zoomOut: `
       <circle cx="11" cy="11" r="8"></circle>
@@ -465,6 +476,7 @@ function createNote() {
   return {
     id: makeId(),
     title: "",
+    tags: [],
     paper: { ...fixedPaper },
     pages: [firstPage],
     selectedPageId: firstPage.id,
@@ -473,11 +485,17 @@ function createNote() {
   };
 }
 
-function createPage(strokes = []) {
-  return {
+function createPage(strokes = [], manual = false) {
+  const page = {
     id: makeId(),
     strokes
   };
+
+  if (manual) {
+    page.manual = true;
+  }
+
+  return page;
 }
 
 function makeId() {
@@ -642,12 +660,47 @@ function normalizeNote(note) {
   return normalizeAutoPages({
     id: note.id,
     title: typeof note.title === "string" ? note.title : "",
+    tags: normalizeTags(note.tags),
     paper: { ...fixedPaper },
     pages,
     selectedPageId,
     createdAt: typeof note.createdAt === "string" ? note.createdAt : new Date().toISOString(),
     updatedAt: typeof note.updatedAt === "string" ? note.updatedAt : new Date().toISOString()
   }, selectedPageId);
+}
+
+function normalizeTags(value) {
+  const rawTags = Array.isArray(value)
+    ? value
+    : typeof value === "string"
+      ? value.split(/[,\n、]/)
+      : [];
+  const tags = [];
+  const seen = new Set();
+
+  for (const rawTag of rawTags) {
+    const tag = normalizeTag(rawTag);
+    const key = tag.toLocaleLowerCase();
+    if (!tag || seen.has(key)) {
+      continue;
+    }
+
+    seen.add(key);
+    tags.push(tag);
+    if (tags.length >= maxTagsPerNote) {
+      break;
+    }
+  }
+
+  return tags;
+}
+
+function normalizeTag(value) {
+  return String(value ?? "")
+    .replace(/^#+/, "")
+    .replace(/\s+/g, " ")
+    .trim()
+    .slice(0, maxTagLength);
 }
 
 function normalizePages(note) {
@@ -664,10 +717,16 @@ function normalizePage(page) {
     return null;
   }
 
-  return {
+  const normalizedPage = {
     id: typeof page.id === "string" ? page.id : makeId(),
     strokes: Array.isArray(page.strokes) ? page.strokes.filter(isValidStroke) : []
   };
+
+  if (page.manual === true) {
+    normalizedPage.manual = true;
+  }
+
+  return normalizedPage;
 }
 
 function normalizeAutoPages(note, preferredPageId = note?.selectedPageId) {
@@ -681,8 +740,9 @@ function normalizeAutoPages(note, preferredPageId = note?.selectedPageId) {
 
   while (
     note.pages.length > 1
-    && !hasPageDrawing(note.pages[note.pages.length - 1])
+    && isRemovableAutoBlankPage(note.pages[note.pages.length - 1], preferredPageId)
     && !hasPageDrawing(note.pages[note.pages.length - 2])
+    && note.pages[note.pages.length - 2].manual !== true
   ) {
     note.pages.pop();
   }
@@ -698,6 +758,13 @@ function normalizeAutoPages(note, preferredPageId = note?.selectedPageId) {
   }
 
   return note;
+}
+
+function isRemovableAutoBlankPage(page, preferredPageId) {
+  return page
+    && page.id !== preferredPageId
+    && page.manual !== true
+    && !hasPageDrawing(page);
 }
 
 function hasPageDrawing(page) {
@@ -879,10 +946,8 @@ function getManualInstallMessage() {
 function renderEditor() {
   const note = getSelectedNote();
   const hasNote = Boolean(note);
-  const page = getSelectedPage(note);
 
   elements.titleInput.disabled = !hasNote;
-  elements.clearCanvasButton.disabled = !hasNote || !page || page.strokes.length === 0;
   elements.titleInput.value = note?.title ?? "";
   renderPageStack(note);
 }
@@ -919,9 +984,22 @@ function renderPageStack(note) {
 
 function renderList() {
   const query = elements.searchInput.value.trim().toLocaleLowerCase();
+  const allTags = getAllTags(notes);
+  if (activeTagFilter && !allTags.some((tag) => tagsMatch(tag, activeTagFilter))) {
+    activeTagFilter = null;
+  }
+
+  renderTagFilters(allTags);
+
   const filtered = sortNotes(notes).filter((note) => {
     const title = (note.title.trim() || "無題").toLocaleLowerCase();
-    return title.includes(query);
+    const tags = Array.isArray(note.tags) ? note.tags : [];
+    const matchesQuery = !query
+      || title.includes(query)
+      || tags.some((tag) => tag.toLocaleLowerCase().includes(query));
+    const matchesTag = !activeTagFilter || tags.some((tag) => tagsMatch(tag, activeTagFilter));
+
+    return matchesQuery && matchesTag;
   });
 
   elements.noteList.replaceChildren();
@@ -936,12 +1014,17 @@ function renderList() {
 
   for (const note of filtered) {
     const item = document.createElement("div");
-    item.className = note.id === selectedId ? "note-item active" : "note-item";
+    item.className = "note-item";
     item.setAttribute("role", "listitem");
+    const noteTags = Array.isArray(note.tags) ? note.tags : [];
+    const noteTitle = note.title.trim() || "無題";
+
+    const main = document.createElement("div");
+    main.className = "note-main";
 
     const title = document.createElement("div");
     title.className = "note-title";
-    title.textContent = note.title.trim() || "無題";
+    title.textContent = noteTitle;
 
     const meta = document.createElement("div");
     meta.className = "note-meta";
@@ -954,36 +1037,273 @@ function renderList() {
     pages.className = "note-pages";
     pages.textContent = `${note.pages.length}ページ`;
 
+    meta.append(date, pages);
+    if (noteTags.length > 0) {
+      const tags = document.createElement("div");
+      tags.className = "note-tags";
+      tags.textContent = noteTags.map((tag) => `#${tag}`).join(" ");
+      meta.append(tags);
+    }
+
     const openButton = document.createElement("button");
     openButton.type = "button";
     openButton.className = "note-open";
-    openButton.setAttribute("aria-current", note.id === selectedId ? "true" : "false");
-    openButton.setAttribute("aria-label", `${title.textContent}，${date.textContent}`);
-    meta.append(date, pages);
+    openButton.setAttribute("aria-label", `${noteTitle}を開く，${date.textContent}`);
     openButton.append(title, meta);
     openButton.addEventListener("click", () => {
-      selectedId = note.id;
-      currentView = "editor";
-      currentStroke = null;
-      clearHistory();
-      persistNow();
-      render();
-      focusSelectedPage();
+      openNote(note.id);
     });
+    main.append(openButton);
 
     const deleteButton = document.createElement("button");
     deleteButton.type = "button";
     deleteButton.className = "icon-button danger note-delete";
     deleteButton.title = "ノート削除";
-    deleteButton.setAttribute("aria-label", `${title.textContent}を削除`);
+    deleteButton.setAttribute("aria-label", `${noteTitle}を削除`);
     setButtonIcon(deleteButton, "trash");
     deleteButton.addEventListener("click", () => {
       deleteNote(note.id);
     });
 
-    item.append(openButton, deleteButton);
+    const titleEditor = createNoteTitleEditor(note, noteTitle);
+    const tagEditor = createNoteTagEditor(note, noteTitle);
+    item.append(main, titleEditor.button, tagEditor.button, deleteButton, titleEditor.input, tagEditor.input);
     elements.noteList.append(item);
   }
+}
+
+function openNote(noteId) {
+  selectedId = noteId;
+  currentView = "editor";
+  currentStroke = null;
+  clearHistory();
+  persistNow();
+  render();
+  focusSelectedPage();
+}
+
+function createNoteTitleEditor(note, noteTitle) {
+  const initialTitle = note.title ?? "";
+  const displayTitle = initialTitle.trim() || "無題";
+  const button = document.createElement("button");
+  button.type = "button";
+  button.className = "icon-button note-title-edit-button";
+  button.title = "名前編集";
+  button.setAttribute("aria-label", `${noteTitle}の名前を編集`);
+  button.setAttribute("aria-expanded", "false");
+  setButtonIcon(button, "pen");
+
+  const input = document.createElement("input");
+  input.className = "note-title-input";
+  input.type = "text";
+  input.value = initialTitle;
+  input.placeholder = "無題";
+  input.autocomplete = "off";
+  input.spellcheck = false;
+  input.setAttribute("aria-label", `${displayTitle}の名前`);
+  input.hidden = true;
+  button.addEventListener("pointerdown", (event) => {
+    if (!input.hidden) {
+      event.preventDefault();
+    }
+  });
+  button.addEventListener("click", () => {
+    if (!input.hidden) {
+      input.blur();
+      return;
+    }
+
+    input.hidden = false;
+    button.setAttribute("aria-expanded", "true");
+    requestAnimationFrame(() => {
+      input.focus({ preventScroll: true });
+      input.select();
+    });
+  });
+  input.addEventListener("blur", () => {
+    updateNoteTitle(note.id, input.value, { renderListAfter: true });
+    input.hidden = true;
+    button.setAttribute("aria-expanded", "false");
+  });
+  input.addEventListener("keydown", (event) => {
+    if (event.key === "Enter") {
+      event.preventDefault();
+      input.blur();
+    } else if (event.key === "Escape") {
+      event.preventDefault();
+      input.value = initialTitle;
+      input.hidden = true;
+      button.setAttribute("aria-expanded", "false");
+      button.focus({ preventScroll: true });
+    }
+  });
+
+  return { button, input };
+}
+
+function renderTagFilters(tags) {
+  elements.tagFilterBar.replaceChildren();
+  elements.tagFilterBar.hidden = false;
+
+  const allButton = document.createElement("button");
+  allButton.type = "button";
+  allButton.className = activeTagFilter ? "tag-filter-chip" : "tag-filter-chip active";
+  allButton.textContent = "すべて";
+  allButton.setAttribute("aria-pressed", String(!activeTagFilter));
+  allButton.addEventListener("click", () => {
+    activeTagFilter = null;
+    renderList();
+  });
+  elements.tagFilterBar.append(allButton);
+
+  for (const tag of tags) {
+    const tagButton = document.createElement("button");
+    tagButton.type = "button";
+    tagButton.className = tagsMatch(tag, activeTagFilter) ? "tag-filter-chip active" : "tag-filter-chip";
+    tagButton.textContent = `#${tag}`;
+    tagButton.setAttribute("aria-pressed", String(tagsMatch(tag, activeTagFilter)));
+    tagButton.addEventListener("click", () => {
+      activeTagFilter = tag;
+      renderList();
+    });
+    elements.tagFilterBar.append(tagButton);
+  }
+}
+
+function createNoteTagEditor(note, noteTitle) {
+  const tags = Array.isArray(note.tags) ? note.tags : [];
+
+  const button = document.createElement("button");
+  button.type = "button";
+  button.className = tags.length > 0
+    ? "icon-button note-tag-button has-tags"
+    : "icon-button note-tag-button";
+  button.title = tags.length > 0 ? `タグ: ${tags.join(", ")}` : "タグを追加";
+  button.setAttribute("aria-label", `${noteTitle}のタグを編集`);
+  button.setAttribute("aria-expanded", "false");
+  setButtonIcon(button, "tag");
+
+  const input = document.createElement("input");
+  input.className = "note-tag-input";
+  input.type = "text";
+  input.value = tags.join(", ");
+  input.placeholder = "タグ";
+  input.autocomplete = "off";
+  input.spellcheck = false;
+  input.hidden = true;
+
+  button.addEventListener("pointerdown", (event) => {
+    if (!input.hidden) {
+      event.preventDefault();
+    }
+  });
+  button.addEventListener("click", () => {
+    if (!input.hidden) {
+      input.blur();
+      return;
+    }
+
+    input.hidden = false;
+    button.setAttribute("aria-expanded", "true");
+    requestAnimationFrame(() => {
+      input.focus({ preventScroll: true });
+      input.select();
+    });
+  });
+
+  input.addEventListener("blur", () => {
+    updateNoteTags(note.id, input.value);
+    input.hidden = true;
+    button.setAttribute("aria-expanded", "false");
+  });
+  input.addEventListener("keydown", (event) => {
+    if (event.key === "Enter") {
+      event.preventDefault();
+      input.blur();
+    } else if (event.key === "Escape") {
+      event.preventDefault();
+      input.value = tags.join(", ");
+      input.hidden = true;
+      button.setAttribute("aria-expanded", "false");
+      button.focus({ preventScroll: true });
+    }
+  });
+
+  return { button, input };
+}
+
+function updateNoteTitle(noteId, value, options = {}) {
+  const { renderListAfter = false, syncEditorInput = true } = options;
+  const note = notes.find((item) => item.id === noteId);
+  if (!note) {
+    return false;
+  }
+
+  const title = String(value ?? "");
+  if (note.title === title) {
+    return false;
+  }
+
+  note.title = title;
+  note.updatedAt = new Date().toISOString();
+  persistSoon();
+
+  if (syncEditorInput && selectedId === noteId && document.activeElement !== elements.titleInput) {
+    elements.titleInput.value = title;
+  }
+
+  if (renderListAfter) {
+    renderList();
+  }
+
+  updateSaveState();
+  return true;
+}
+
+function updateNoteTags(noteId, value) {
+  const note = notes.find((item) => item.id === noteId);
+  if (!note) {
+    return;
+  }
+
+  const tags = normalizeTags(value);
+  if (tagsEqual(note.tags, tags)) {
+    return;
+  }
+
+  note.tags = tags;
+  note.updatedAt = new Date().toISOString();
+  notes = sortNotes(notes);
+  persistSoon();
+  renderList();
+  updateSaveState();
+}
+
+function getAllTags(items) {
+  const tags = [];
+  const seen = new Set();
+
+  for (const note of items) {
+    for (const tag of note.tags ?? []) {
+      const key = tag.toLocaleLowerCase();
+      if (seen.has(key)) {
+        continue;
+      }
+
+      seen.add(key);
+      tags.push(tag);
+    }
+  }
+
+  return tags.sort((left, right) => left.localeCompare(right, "ja"));
+}
+
+function tagsEqual(left = [], right = []) {
+  return left.length === right.length && left.every((tag, index) => tag === right[index]);
+}
+
+function tagsMatch(left, right) {
+  return Boolean(left && right && left.toLocaleLowerCase() === right.toLocaleLowerCase());
 }
 
 function updateToolButtons() {
@@ -991,6 +1311,7 @@ function updateToolButtons() {
   const eraserActive = activeTool === "eraser";
   const strokeEraserActive = activeTool === "stroke-eraser";
   const lassoActive = activeTool === "lasso";
+  const laserActive = activeTool === "laser";
   const eraserGroupActive = eraserActive || strokeEraserActive;
   const eraserLabel = activeEraserTool === "stroke-eraser"
     ? "ストローク消しゴム"
@@ -1002,6 +1323,7 @@ function updateToolButtons() {
   elements.penButton.classList.toggle("active", penActive);
   elements.eraserButton.classList.toggle("active", eraserGroupActive);
   elements.lassoButton.classList.toggle("active", lassoActive);
+  elements.laserButton.classList.toggle("active", laserActive);
   elements.penToolCluster.classList.toggle("open", penActive);
   elements.eraserToolCluster.classList.toggle("open", eraserGroupActive);
   elements.lassoToolCluster.classList.toggle("open", lassoActive);
@@ -1010,6 +1332,7 @@ function updateToolButtons() {
   elements.penButton.setAttribute("aria-pressed", String(penActive));
   elements.eraserButton.setAttribute("aria-pressed", String(eraserGroupActive));
   elements.lassoButton.setAttribute("aria-pressed", String(lassoActive));
+  elements.laserButton.setAttribute("aria-pressed", String(laserActive));
   elements.eraserModeButton.setAttribute("aria-pressed", "false");
   elements.pencilModeButton.setAttribute("aria-pressed", String(pencilModeActive));
   elements.eraserButton.title = eraserLabel;
@@ -1055,9 +1378,11 @@ function updatePageControls() {
     && page
     && pageIndex === pageCount - 1
     && !hasPageDrawing(page)
+    && page.manual !== true
   );
 
   elements.pageState.textContent = pageCount > 0 ? `${pageNumber} / ${pageCount}` : "0 / 0";
+  elements.insertPageAboveButton.disabled = !note || pageIndex < 0;
   elements.deletePageButton.disabled = !note || pageCount <= 1 || selectedPageIsAutoBlank;
   updatePageSelection();
 }
@@ -1076,7 +1401,6 @@ function updateActionButtons() {
   elements.undoButton.disabled = !note || (!hasFallbackUndo && undoStack.length === 0);
   elements.redoButton.disabled = redoStack.length === 0;
   elements.exportPdfButton.disabled = !note;
-  elements.clearCanvasButton.disabled = !note || !page || page.strokes.length === 0;
 }
 
 function undoLastAction() {
@@ -1739,6 +2063,27 @@ function selectMostlyVisiblePage() {
   }
 }
 
+function insertPageAboveCurrent() {
+  const note = getSelectedNote();
+  const pageIndex = getSelectedPageIndex(note);
+  if (!note || pageIndex < 0) {
+    return;
+  }
+
+  const page = createPage([], true);
+  note.pages.splice(pageIndex, 0, page);
+  note.selectedPageId = page.id;
+  normalizeAutoPages(note, page.id);
+  note.updatedAt = new Date().toISOString();
+  currentStroke = null;
+  clearLassoSelection(false);
+  clearHistory();
+  notes = sortNotes(notes);
+  persistSoon();
+  render();
+  focusSelectedPage();
+}
+
 function deleteCurrentPage() {
   const note = getSelectedNote();
   const pageIndex = getSelectedPageIndex(note);
@@ -1777,12 +2122,7 @@ function startStroke(event) {
   }
 
   if (event.pointerType === "touch" && pencilModeActive) {
-    if (currentStroke || touchScrollGesture) {
-      preventIgnoredCanvasInput(event);
-      return;
-    }
-
-    beginTouchScroll(event, canvas);
+    handlePencilTouchStart(event, canvas);
     return;
   }
 
@@ -1800,6 +2140,18 @@ function startStroke(event) {
   const point = getCanvasPoint(event, canvas);
   if (activeTool === "lasso") {
     startLassoAction(page, canvas, event.pointerId, point);
+    redrawPage(page.id);
+    return;
+  }
+
+  if (activeTool === "laser") {
+    currentStroke = {
+      type: "laser",
+      pageId: page.id,
+      canvas,
+      pointerId: event.pointerId,
+      points: [point]
+    };
     redrawPage(page.id);
     return;
   }
@@ -1825,7 +2177,7 @@ function startStroke(event) {
     stroke: {
       tool: activeTool,
       color: activeTool === "eraser" ? "#000000" : activeColor,
-      width: activeTool === "eraser" ? fixedStrokeWidth * 3 : fixedStrokeWidth,
+      width: activeTool === "eraser" ? fixedEraserStrokeWidth : fixedStrokeWidth,
       points: [point]
     }
   };
@@ -1837,6 +2189,10 @@ function startStroke(event) {
 }
 
 function continueStroke(event) {
+  if (event.pointerType === "touch" && pencilModeActive && handlePencilTouchMove(event)) {
+    return;
+  }
+
   if (isTouchScrollPointer(event)) {
     continueTouchScroll(event);
     return;
@@ -1859,6 +2215,11 @@ function continueStroke(event) {
     return;
   }
 
+  if (currentStroke.type === "laser") {
+    continueLaserPointer(event);
+    return;
+  }
+
   if (currentStroke.type === "stroke-eraser") {
     const note = getSelectedNote();
     const page = getPageById(note, currentStroke.pageId);
@@ -1869,12 +2230,13 @@ function continueStroke(event) {
     return;
   }
 
-  const point = getCanvasPoint(event, currentStroke.canvas);
-  const lastPoint = currentStroke.stroke.points[currentStroke.stroke.points.length - 1];
-  const distance = Math.hypot(point.x - lastPoint.x, point.y - lastPoint.y);
   if (currentStroke.stroke.tool === "eraser") {
     updateEraserPreview(event, currentStroke.canvas, currentStroke.stroke.tool);
   }
+
+  const point = getCanvasPoint(event, currentStroke.canvas);
+  const lastPoint = currentStroke.stroke.points[currentStroke.stroke.points.length - 1];
+  const distance = Math.hypot(point.x - lastPoint.x, point.y - lastPoint.y);
 
   if (distance >= 1.5) {
     currentStroke.stroke.points.push(point);
@@ -1883,6 +2245,10 @@ function continueStroke(event) {
 }
 
 function finishStroke(event) {
+  if (event.pointerType === "touch" && pencilModeActive && handlePencilTouchEnd(event)) {
+    return;
+  }
+
   if (isTouchScrollPointer(event)) {
     finishTouchScroll(event);
     return;
@@ -1916,6 +2282,11 @@ function finishStroke(event) {
     return;
   }
 
+  if (strokeAction.type === "laser") {
+    redrawPage(strokeAction.pageId);
+    return;
+  }
+
   if (strokeAction.type === "stroke-eraser") {
     finishStrokeErase(strokeAction);
     return;
@@ -1940,6 +2311,10 @@ function finishStroke(event) {
 }
 
 function cancelStroke(event) {
+  if (event.pointerType === "touch" && pencilModeActive && handlePencilTouchEnd(event, true)) {
+    return;
+  }
+
   if (isTouchScrollPointer(event)) {
     finishTouchScroll(event);
     return;
@@ -1979,6 +2354,12 @@ function cancelStroke(event) {
   if (pageId) {
     redrawPage(pageId);
   }
+}
+
+function continueLaserPointer(event) {
+  const point = getCanvasPoint(event, currentStroke.canvas);
+  currentStroke.points = [point];
+  redrawPage(currentStroke.pageId);
 }
 
 function startLassoAction(page, canvas, pointerId, point) {
@@ -2538,6 +2919,164 @@ function canUsePointerForDrawing(event) {
   return event.pointerType !== "touch" || !pencilModeActive;
 }
 
+function handlePencilTouchStart(event, canvas) {
+  preventIgnoredCanvasInput(event);
+
+  if (currentStroke) {
+    return true;
+  }
+
+  const now = getEventTimestamp(event);
+  pencilTouchPointers.set(event.pointerId, {
+    pointerId: event.pointerId,
+    canvas,
+    startX: event.clientX,
+    startY: event.clientY,
+    lastX: event.clientX,
+    lastY: event.clientY,
+    startTime: now,
+    moved: false
+  });
+
+  if (!canvas.hasPointerCapture(event.pointerId)) {
+    canvas.setPointerCapture(event.pointerId);
+  }
+
+  if (pencilTouchPointers.size === 1) {
+    beginTouchScroll(event, canvas);
+    return true;
+  }
+
+  if (pencilTouchPointers.size === 2) {
+    stopTouchScrollGesture();
+    const pointers = [...pencilTouchPointers.values()];
+    const pairStartGap = Math.abs(pointers[0].startTime - pointers[1].startTime);
+    twoFingerTapCandidate = {
+      pointerIds: new Set(pointers.map((pointer) => pointer.pointerId)),
+      startTime: Math.min(...pointers.map((pointer) => pointer.startTime)),
+      valid: pairStartGap <= twoFingerTapPairWindow
+        && pointers.every((pointer) => !pointer.moved && pointer.canvas === canvas)
+    };
+    return true;
+  }
+
+  stopTouchScrollGesture();
+  if (twoFingerTapCandidate) {
+    twoFingerTapCandidate.valid = false;
+  }
+  return true;
+}
+
+function handlePencilTouchMove(event) {
+  const pointer = pencilTouchPointers.get(event.pointerId);
+  if (!pointer) {
+    return false;
+  }
+
+  event.preventDefault();
+  updatePencilTouchPointer(pointer, event);
+
+  if (twoFingerTapCandidate?.pointerIds.has(event.pointerId) && pointer.moved) {
+    twoFingerTapCandidate.valid = false;
+  }
+
+  if (!twoFingerTapCandidate && isTouchScrollPointer(event)) {
+    continueTouchScroll(event);
+  }
+
+  return true;
+}
+
+function handlePencilTouchEnd(event, cancelled = false) {
+  const pointer = pencilTouchPointers.get(event.pointerId);
+  if (!pointer) {
+    return false;
+  }
+
+  event.preventDefault();
+  updatePencilTouchPointer(pointer, event);
+  releasePointerCapture(pointer.canvas, event.pointerId);
+
+  if (touchScrollGesture?.pointerId === event.pointerId) {
+    touchScrollGesture = null;
+  }
+
+  pencilTouchPointers.delete(event.pointerId);
+
+  if (twoFingerTapCandidate?.pointerIds.has(event.pointerId)) {
+    if (cancelled || pointer.moved || getEventTimestamp(event) - pointer.startTime > twoFingerTapMaxDuration) {
+      twoFingerTapCandidate.valid = false;
+    }
+
+    const candidateEnded = [...twoFingerTapCandidate.pointerIds]
+      .every((pointerId) => !pencilTouchPointers.has(pointerId));
+    if (candidateEnded) {
+      finishTwoFingerTapCandidate(event);
+    }
+  }
+
+  if (pencilTouchPointers.size === 0 && !twoFingerTapCandidate) {
+    touchScrollGesture = null;
+  }
+
+  return true;
+}
+
+function updatePencilTouchPointer(pointer, event) {
+  pointer.lastX = event.clientX;
+  pointer.lastY = event.clientY;
+
+  if (getPointerMoveDistance(pointer, event) > twoFingerTapMaxMove) {
+    pointer.moved = true;
+  }
+}
+
+function getPointerMoveDistance(pointer, event) {
+  return Math.hypot(event.clientX - pointer.startX, event.clientY - pointer.startY);
+}
+
+function finishTwoFingerTapCandidate(event) {
+  const candidate = twoFingerTapCandidate;
+  twoFingerTapCandidate = null;
+
+  if (!candidate?.valid || getEventTimestamp(event) - candidate.startTime > twoFingerTapMaxDuration) {
+    return;
+  }
+
+  const now = getEventTimestamp(event);
+  if (now - lastTwoFingerTapAt <= twoFingerDoubleTapWindow) {
+    lastTwoFingerTapAt = 0;
+    undoLastAction();
+    return;
+  }
+
+  lastTwoFingerTapAt = now;
+}
+
+function stopTouchScrollGesture() {
+  touchScrollGesture = null;
+}
+
+function resetPencilTouchGesture() {
+  for (const pointer of pencilTouchPointers.values()) {
+    releasePointerCapture(pointer.canvas, pointer.pointerId);
+  }
+
+  pencilTouchPointers.clear();
+  twoFingerTapCandidate = null;
+  touchScrollGesture = null;
+}
+
+function releasePointerCapture(canvas, pointerId) {
+  if (canvas?.hasPointerCapture(pointerId)) {
+    canvas.releasePointerCapture(pointerId);
+  }
+}
+
+function getEventTimestamp(event) {
+  return typeof event.timeStamp === "number" ? event.timeStamp : performance.now();
+}
+
 function beginTouchScroll(event, canvas) {
   event.preventDefault();
   clearEditorSelectionInPencilMode();
@@ -2706,12 +3245,12 @@ function getScreenLengthAsCanvasPixels(canvas, length) {
 }
 
 function getNormalEraserCanvasRadius() {
-  return (fixedStrokeWidth * 3) / 2;
+  return fixedEraserStrokeWidth / 2;
 }
 
 function getPenStrokeCanvasRadius(stroke) {
   const baseWidth = typeof stroke?.width === "number" ? stroke.width : fixedStrokeWidth;
-  return (baseWidth * fountainPenMaxScale) / 2;
+  return baseWidth / 2;
 }
 
 function getNormalEraserScreenRadius(canvas) {
@@ -2792,25 +3331,8 @@ function getCanvasPoint(event, canvas) {
 
   return {
     x: clamp(((event.clientX - rect.left) / rect.width) * canvas.width, 0, canvas.width),
-    y: clamp(((event.clientY - rect.top) / rect.height) * canvas.height, 0, canvas.height),
-    pressure: getPointerPressure(event)
+    y: clamp(((event.clientY - rect.top) / rect.height) * canvas.height, 0, canvas.height)
   };
-}
-
-function getPointerPressure(event) {
-  if (typeof event.pressure !== "number") {
-    return fountainPenFallbackPressure;
-  }
-
-  if (event.pointerType === "pen") {
-    return clamp(event.pressure || 0.1, 0.1, 1);
-  }
-
-  if (event.pressure > 0) {
-    return clamp(event.pressure, 0.2, 1);
-  }
-
-  return fountainPenFallbackPressure;
 }
 
 function clamp(value, min, max) {
@@ -2866,6 +3388,10 @@ function redrawPage(pageId) {
   if (lassoSelection?.pageId === pageId) {
     drawLassoSelection(lassoSelection, context);
   }
+
+  if (currentStroke?.type === "laser" && currentStroke.pageId === pageId) {
+    drawLaserPointer(currentStroke.points, context);
+  }
 }
 
 function updatePaperPatterns() {
@@ -2906,15 +3432,16 @@ function drawStroke(stroke, targetContext) {
 
   targetContext.save();
   targetContext.globalCompositeOperation = stroke.tool === "eraser" ? "destination-out" : "source-over";
+  drawFixedWidthStroke(stroke, targetContext, getStrokeLineWidth(stroke));
+  targetContext.restore();
+}
 
-  if (stroke.tool === "pen") {
-    drawFountainStroke(stroke, targetContext);
-    targetContext.restore();
-    return;
+function getStrokeLineWidth(stroke) {
+  if (stroke.tool === "eraser") {
+    return fixedEraserStrokeWidth;
   }
 
-  drawFixedWidthStroke(stroke, targetContext, fixedStrokeWidth * 3);
-  targetContext.restore();
+  return typeof stroke.width === "number" ? stroke.width : fixedStrokeWidth;
 }
 
 function drawFixedWidthStroke(stroke, targetContext, lineWidth) {
@@ -2947,116 +3474,28 @@ function drawFixedWidthStroke(stroke, targetContext, lineWidth) {
   targetContext.stroke();
 }
 
-function drawFountainStroke(stroke, targetContext) {
-  const points = stroke.points;
-  const baseWidth = typeof stroke.width === "number" ? stroke.width : fixedStrokeWidth;
-  const widths = points.map((point, index) => getFountainPointWidth(points, index, baseWidth));
-
-  targetContext.fillStyle = stroke.color;
-  targetContext.globalAlpha = 0.96;
-
-  if (points.length === 1) {
-    drawFountainDot(targetContext, points[0], widths[0]);
+function drawLaserPointer(points, targetContext) {
+  if (points.length === 0) {
     return;
   }
 
-  const leftEdge = [];
-  const rightEdge = [];
-
-  for (let index = 0; index < points.length; index += 1) {
-    const point = points[index];
-    const previous = points[index - 1] ?? point;
-    const next = points[index + 1] ?? point;
-    let tangentX = next.x - previous.x;
-    let tangentY = next.y - previous.y;
-    let tangentLength = Math.hypot(tangentX, tangentY);
-
-    if (tangentLength === 0) {
-      tangentX = 1;
-      tangentY = 0;
-      tangentLength = 1;
-    }
-
-    const normalX = -tangentY / tangentLength;
-    const normalY = tangentX / tangentLength;
-    const radius = widths[index] / 2;
-
-    leftEdge.push({
-      x: point.x + normalX * radius,
-      y: point.y + normalY * radius
-    });
-    rightEdge.push({
-      x: point.x - normalX * radius,
-      y: point.y - normalY * radius
-    });
-  }
-
-  targetContext.beginPath();
-  targetContext.moveTo(leftEdge[0].x, leftEdge[0].y);
-  addSmoothOutline(targetContext, leftEdge);
-
-  const reversedRightEdge = [...rightEdge].reverse();
-  targetContext.lineTo(reversedRightEdge[0].x, reversedRightEdge[0].y);
-  addSmoothOutline(targetContext, reversedRightEdge);
-  targetContext.closePath();
-  targetContext.fill();
-}
-
-function drawFountainDot(targetContext, point, width) {
   targetContext.save();
-  targetContext.translate(point.x, point.y);
-  targetContext.rotate(-Math.PI / 7);
+  targetContext.globalCompositeOperation = "source-over";
+
+  const point = points[points.length - 1];
+  targetContext.fillStyle = "rgba(224, 42, 42, 0.22)";
+  targetContext.shadowColor = "rgba(224, 42, 42, 0.75)";
+  targetContext.shadowBlur = laserPointerRadius * 0.8;
   targetContext.beginPath();
-  targetContext.ellipse(0, 0, width * 0.52, Math.max(width * 0.28, 0.45), 0, 0, Math.PI * 2);
+  targetContext.arc(point.x, point.y, laserPointerRadius, 0, Math.PI * 2);
+  targetContext.fill();
+
+  targetContext.shadowBlur = 0;
+  targetContext.fillStyle = "rgba(224, 42, 42, 0.92)";
+  targetContext.beginPath();
+  targetContext.arc(point.x, point.y, laserPointerCoreRadius, 0, Math.PI * 2);
   targetContext.fill();
   targetContext.restore();
-}
-
-function addSmoothOutline(targetContext, points) {
-  if (points.length < 2) {
-    return;
-  }
-
-  for (let index = 0; index < points.length - 1; index += 1) {
-    const current = points[index];
-    const next = points[index + 1];
-    const midX = (current.x + next.x) / 2;
-    const midY = (current.y + next.y) / 2;
-    targetContext.quadraticCurveTo(current.x, current.y, midX, midY);
-  }
-
-  const lastPoint = points[points.length - 1];
-  targetContext.lineTo(lastPoint.x, lastPoint.y);
-}
-
-function getFountainPointWidth(points, index, baseWidth) {
-  const point = points[index];
-  const previous = points[index - 1] ?? point;
-  const next = points[index + 1] ?? point;
-  const travel = (Math.hypot(point.x - previous.x, point.y - previous.y)
-    + Math.hypot(next.x - point.x, next.y - point.y)) / 2;
-  const speedFactor = clamp(travel / fountainPenSpeedReference, 0, 1);
-  const pressure = getStoredPressure(point);
-  const minWidth = baseWidth * fountainPenMinScale;
-  const maxWidth = baseWidth * fountainPenMaxScale;
-  const pressureFactor = 0.32 + pressure * 0.68;
-  let width = minWidth + (maxWidth - minWidth) * pressureFactor;
-
-  width *= 1 - speedFactor * 0.28;
-
-  if (points.length > 2) {
-    const edgeDistance = Math.min(index, points.length - 1 - index);
-    const taper = 0.58 + 0.42 * clamp(edgeDistance / fountainPenTaperPoints, 0, 1);
-    width *= taper;
-  }
-
-  return clamp(width, minWidth, maxWidth);
-}
-
-function getStoredPressure(point) {
-  return typeof point.pressure === "number"
-    ? clamp(point.pressure, 0.1, 1)
-    : fountainPenFallbackPressure;
 }
 
 function drawLassoSelection(selection, targetContext) {
