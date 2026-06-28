@@ -25,11 +25,14 @@ const notebookPaperColor = "#fffefa";
 const notebookRuleColor = "rgba(85, 142, 170, 0.36)";
 const notebookDotColor = "rgba(85, 142, 170, 0.28)";
 const fixedStrokeWidth = 2.5;
-const fountainPenMinScale = 0.42;
-const fountainPenMaxScale = 1.24;
-const fountainPenSpeedReference = 24;
-const fountainPenTaperPoints = 4;
-const fountainPenFallbackPressure = 0.55;
+const ballpointMinScale = 0.56;
+const ballpointMaxScale = 0.9;
+const ballpointSpeedReference = 30;
+const ballpointFallbackPressure = 0.52;
+const ballpointMinimumAlpha = 0.76;
+const ballpointMaximumAlpha = 0.96;
+const ballpointTextureStrength = 0.045;
+const ballpointPointSpacing = 0.85;
 const lassoPasteOffset = 48;
 const lassoPointSpacing = 3;
 const lassoMinimumPoints = 3;
@@ -1869,15 +1872,17 @@ function continueStroke(event) {
     return;
   }
 
-  const point = getCanvasPoint(event, currentStroke.canvas);
-  const lastPoint = currentStroke.stroke.points[currentStroke.stroke.points.length - 1];
-  const distance = Math.hypot(point.x - lastPoint.x, point.y - lastPoint.y);
   if (currentStroke.stroke.tool === "eraser") {
     updateEraserPreview(event, currentStroke.canvas, currentStroke.stroke.tool);
   }
 
-  if (distance >= 1.5) {
-    currentStroke.stroke.points.push(point);
+  const points = getCanvasPoints(event, currentStroke.canvas);
+  let hasNewPoint = false;
+  for (const point of points) {
+    hasNewPoint = appendStrokePoint(currentStroke.stroke, point) || hasNewPoint;
+  }
+
+  if (hasNewPoint) {
     redrawPage(currentStroke.pageId);
   }
 }
@@ -2711,7 +2716,7 @@ function getNormalEraserCanvasRadius() {
 
 function getPenStrokeCanvasRadius(stroke) {
   const baseWidth = typeof stroke?.width === "number" ? stroke.width : fixedStrokeWidth;
-  return (baseWidth * fountainPenMaxScale) / 2;
+  return (baseWidth * ballpointMaxScale) / 2;
 }
 
 function getNormalEraserScreenRadius(canvas) {
@@ -2787,30 +2792,73 @@ function distanceToSegmentSquared(point, start, end) {
   return distanceSquared(point, closest);
 }
 
-function getCanvasPoint(event, canvas) {
+function getCanvasPoint(event, canvas, fallbackEvent = event) {
   const rect = canvas.getBoundingClientRect();
 
   return {
     x: clamp(((event.clientX - rect.left) / rect.width) * canvas.width, 0, canvas.width),
     y: clamp(((event.clientY - rect.top) / rect.height) * canvas.height, 0, canvas.height),
-    pressure: getPointerPressure(event)
+    pressure: getPointerPressure(event, fallbackEvent)
   };
 }
 
-function getPointerPressure(event) {
-  if (typeof event.pressure !== "number") {
-    return fountainPenFallbackPressure;
+function getCanvasPoints(event, canvas) {
+  if (typeof event.getCoalescedEvents !== "function") {
+    return [getCanvasPoint(event, canvas)];
   }
 
-  if (event.pointerType === "pen") {
-    return clamp(event.pressure || 0.1, 0.1, 1);
+  const coalescedEvents = event.getCoalescedEvents();
+  const sourceEvents = coalescedEvents.length > 0 ? [...coalescedEvents] : [event];
+  const lastEvent = sourceEvents[sourceEvents.length - 1];
+  if (lastEvent.clientX !== event.clientX || lastEvent.clientY !== event.clientY) {
+    sourceEvents.push(event);
   }
 
-  if (event.pressure > 0) {
-    return clamp(event.pressure, 0.2, 1);
+  return sourceEvents.map((sourceEvent) => getCanvasPoint(sourceEvent, canvas, event));
+}
+
+function appendStrokePoint(stroke, point) {
+  const lastPoint = stroke.points[stroke.points.length - 1];
+  const minimumDistance = stroke.tool === "pen" ? ballpointPointSpacing : 1.5;
+  const distance = Math.hypot(point.x - lastPoint.x, point.y - lastPoint.y);
+
+  if (distance < minimumDistance) {
+    return false;
   }
 
-  return fountainPenFallbackPressure;
+  const nextPoint = stroke.tool === "pen" ? smoothPenPointPressure(lastPoint, point) : point;
+  stroke.points.push(nextPoint);
+  return true;
+}
+
+function smoothPenPointPressure(previousPoint, point) {
+  if (typeof previousPoint.pressure !== "number" || typeof point.pressure !== "number") {
+    return point;
+  }
+
+  return {
+    ...point,
+    pressure: previousPoint.pressure * 0.62 + point.pressure * 0.38
+  };
+}
+
+function getPointerPressure(event, fallbackEvent = event) {
+  const pressure = typeof event.pressure === "number" ? event.pressure : fallbackEvent.pressure;
+  const pointerType = event.pointerType || fallbackEvent.pointerType;
+
+  if (typeof pressure !== "number") {
+    return ballpointFallbackPressure;
+  }
+
+  if (pointerType === "pen") {
+    return clamp(pressure || 0.1, 0.1, 1);
+  }
+
+  if (pressure > 0) {
+    return clamp(pressure, 0.2, 1);
+  }
+
+  return ballpointFallbackPressure;
 }
 
 function clamp(value, min, max) {
@@ -2908,7 +2956,7 @@ function drawStroke(stroke, targetContext) {
   targetContext.globalCompositeOperation = stroke.tool === "eraser" ? "destination-out" : "source-over";
 
   if (stroke.tool === "pen") {
-    drawFountainStroke(stroke, targetContext);
+    drawBallpointStroke(stroke, targetContext);
     targetContext.restore();
     return;
   }
@@ -2947,116 +2995,101 @@ function drawFixedWidthStroke(stroke, targetContext, lineWidth) {
   targetContext.stroke();
 }
 
-function drawFountainStroke(stroke, targetContext) {
+function drawBallpointStroke(stroke, targetContext) {
   const points = stroke.points;
   const baseWidth = typeof stroke.width === "number" ? stroke.width : fixedStrokeWidth;
-  const widths = points.map((point, index) => getFountainPointWidth(points, index, baseWidth));
-
+  targetContext.strokeStyle = stroke.color;
   targetContext.fillStyle = stroke.color;
-  targetContext.globalAlpha = 0.96;
 
   if (points.length === 1) {
-    drawFountainDot(targetContext, points[0], widths[0]);
+    drawBallpointDot(targetContext, points[0], getBallpointPointWidth(points, 0, baseWidth));
     return;
   }
 
-  const leftEdge = [];
-  const rightEdge = [];
+  targetContext.lineCap = "round";
+  targetContext.lineJoin = "round";
 
-  for (let index = 0; index < points.length; index += 1) {
-    const point = points[index];
-    const previous = points[index - 1] ?? point;
-    const next = points[index + 1] ?? point;
-    let tangentX = next.x - previous.x;
-    let tangentY = next.y - previous.y;
-    let tangentLength = Math.hypot(tangentX, tangentY);
+  for (let index = 1; index < points.length; index += 1) {
+    const previous = points[index - 1];
+    const current = points[index];
 
-    if (tangentLength === 0) {
-      tangentX = 1;
-      tangentY = 0;
-      tangentLength = 1;
+    if (distanceSquared(previous, current) === 0) {
+      continue;
     }
 
-    const normalX = -tangentY / tangentLength;
-    const normalY = tangentX / tangentLength;
-    const radius = widths[index] / 2;
+    const width = (
+      getBallpointPointWidth(points, index - 1, baseWidth)
+      + getBallpointPointWidth(points, index, baseWidth)
+    ) / 2;
+    const alpha = (
+      getBallpointPointAlpha(points, index - 1)
+      + getBallpointPointAlpha(points, index)
+    ) / 2;
 
-    leftEdge.push({
-      x: point.x + normalX * radius,
-      y: point.y + normalY * radius
-    });
-    rightEdge.push({
-      x: point.x - normalX * radius,
-      y: point.y - normalY * radius
-    });
+    targetContext.globalAlpha = clamp(alpha * getBallpointInkTexture(index, previous, current), 0.62, 0.98);
+    targetContext.lineWidth = width;
+    targetContext.beginPath();
+    targetContext.moveTo(previous.x, previous.y);
+    targetContext.lineTo(current.x, current.y);
+    targetContext.stroke();
   }
-
-  targetContext.beginPath();
-  targetContext.moveTo(leftEdge[0].x, leftEdge[0].y);
-  addSmoothOutline(targetContext, leftEdge);
-
-  const reversedRightEdge = [...rightEdge].reverse();
-  targetContext.lineTo(reversedRightEdge[0].x, reversedRightEdge[0].y);
-  addSmoothOutline(targetContext, reversedRightEdge);
-  targetContext.closePath();
-  targetContext.fill();
 }
 
-function drawFountainDot(targetContext, point, width) {
+function drawBallpointDot(targetContext, point, width) {
   targetContext.save();
-  targetContext.translate(point.x, point.y);
-  targetContext.rotate(-Math.PI / 7);
+  targetContext.globalAlpha = ballpointMaximumAlpha;
+  targetContext.fillStyle = targetContext.strokeStyle;
   targetContext.beginPath();
-  targetContext.ellipse(0, 0, width * 0.52, Math.max(width * 0.28, 0.45), 0, 0, Math.PI * 2);
+  targetContext.arc(point.x, point.y, Math.max(width / 2, 0.45), 0, Math.PI * 2);
   targetContext.fill();
   targetContext.restore();
 }
 
-function addSmoothOutline(targetContext, points) {
-  if (points.length < 2) {
-    return;
-  }
+function getBallpointPointWidth(points, index, baseWidth) {
+  const point = points[index];
+  const speedFactor = clamp(getPointTravel(points, index) / ballpointSpeedReference, 0, 1);
+  const pressure = getStoredPressure(point);
+  const minWidth = baseWidth * ballpointMinScale;
+  const maxWidth = baseWidth * ballpointMaxScale;
+  const pressureFactor = 0.44 + pressure * 0.56;
+  let width = minWidth + (maxWidth - minWidth) * pressureFactor;
 
-  for (let index = 0; index < points.length - 1; index += 1) {
-    const current = points[index];
-    const next = points[index + 1];
-    const midX = (current.x + next.x) / 2;
-    const midY = (current.y + next.y) / 2;
-    targetContext.quadraticCurveTo(current.x, current.y, midX, midY);
-  }
+  width *= 1 - speedFactor * 0.12;
 
-  const lastPoint = points[points.length - 1];
-  targetContext.lineTo(lastPoint.x, lastPoint.y);
+  return clamp(width, minWidth, maxWidth);
 }
 
-function getFountainPointWidth(points, index, baseWidth) {
+function getBallpointPointAlpha(points, index) {
+  const point = points[index];
+  const speedFactor = clamp(getPointTravel(points, index) / ballpointSpeedReference, 0, 1);
+  const pressure = getStoredPressure(point);
+  const pressureFactor = 0.5 + pressure * 0.5;
+  let alpha = ballpointMinimumAlpha + (ballpointMaximumAlpha - ballpointMinimumAlpha) * pressureFactor;
+
+  alpha *= 1 - speedFactor * 0.1;
+  return clamp(alpha, ballpointMinimumAlpha, ballpointMaximumAlpha);
+}
+
+function getBallpointInkTexture(index, start, end) {
+  const grain = Math.sin(index * 12.9898 + start.x * 0.021 + start.y * 0.037 + end.x * 0.017 + end.y * 0.029);
+  const normalized = (grain + 1) / 2;
+
+  return 1 - ballpointTextureStrength * normalized;
+}
+
+function getPointTravel(points, index) {
   const point = points[index];
   const previous = points[index - 1] ?? point;
   const next = points[index + 1] ?? point;
-  const travel = (Math.hypot(point.x - previous.x, point.y - previous.y)
+
+  return (Math.hypot(point.x - previous.x, point.y - previous.y)
     + Math.hypot(next.x - point.x, next.y - point.y)) / 2;
-  const speedFactor = clamp(travel / fountainPenSpeedReference, 0, 1);
-  const pressure = getStoredPressure(point);
-  const minWidth = baseWidth * fountainPenMinScale;
-  const maxWidth = baseWidth * fountainPenMaxScale;
-  const pressureFactor = 0.32 + pressure * 0.68;
-  let width = minWidth + (maxWidth - minWidth) * pressureFactor;
-
-  width *= 1 - speedFactor * 0.28;
-
-  if (points.length > 2) {
-    const edgeDistance = Math.min(index, points.length - 1 - index);
-    const taper = 0.58 + 0.42 * clamp(edgeDistance / fountainPenTaperPoints, 0, 1);
-    width *= taper;
-  }
-
-  return clamp(width, minWidth, maxWidth);
 }
 
 function getStoredPressure(point) {
   return typeof point.pressure === "number"
     ? clamp(point.pressure, 0.1, 1)
-    : fountainPenFallbackPressure;
+    : ballpointFallbackPressure;
 }
 
 function drawLassoSelection(selection, targetContext) {
