@@ -32,6 +32,8 @@ const twoFingerTapPairWindow = 120;
 const twoFingerTapMaxDuration = 260;
 const twoFingerTapMaxMove = 24;
 const twoFingerDoubleTapWindow = 420;
+const maxTagsPerNote = 8;
+const maxTagLength = 24;
 const lassoPasteOffset = 48;
 const lassoPointSpacing = 3;
 const lassoMinimumPoints = 3;
@@ -71,6 +73,7 @@ const elements = {
   colorSwatches: document.querySelector("#colorSwatches"),
   swatches: [...document.querySelectorAll(".swatch")],
   searchInput: document.querySelector("#searchInput"),
+  tagFilterBar: document.querySelector("#tagFilterBar"),
   noteList: document.querySelector("#noteList"),
   titleInput: document.querySelector("#titleInput"),
   canvasShell: document.querySelector(".canvas-shell"),
@@ -94,6 +97,7 @@ let currentStroke = null;
 let activeTool = "pen";
 let activeEraserTool = "eraser";
 let activeColor = "#202124";
+let activeTagFilter = null;
 let lassoSelection = null;
 let lassoClipboard = null;
 let undoStack = [];
@@ -233,10 +237,10 @@ elements.titleInput.addEventListener("input", () => {
     return;
   }
 
-  note.title = elements.titleInput.value;
-  note.updatedAt = new Date().toISOString();
-  persistSoon();
-  renderList();
+  updateNoteTitle(note.id, elements.titleInput.value, {
+    renderListAfter: true,
+    syncEditorInput: false
+  });
 });
 
 window.addEventListener("beforeunload", persistNow);
@@ -344,6 +348,10 @@ function getLucideIconPaths(iconName) {
     clipboardPaste: `
       <path d="M15 2H9a2 2 0 0 0-2 2v2h10V4a2 2 0 0 0-2-2Z"></path>
       <path d="M8 4H6a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V6a2 2 0 0 0-2-2h-2"></path>
+    `,
+    tag: `
+      <path d="M12.586 2.586A2 2 0 0 0 11.172 2H4a2 2 0 0 0-2 2v7.172a2 2 0 0 0 .586 1.414l8.704 8.704a2.426 2.426 0 0 0 3.432 0l6.568-6.568a2.426 2.426 0 0 0 0-3.432z"></path>
+      <circle cx="7.5" cy="7.5" r=".5" fill="currentColor"></circle>
     `,
     laserPointer: `
       <path d="m4 4 7.07 16.97 2.51-7.39 7.39-2.51L4 4Z"></path>
@@ -468,6 +476,7 @@ function createNote() {
   return {
     id: makeId(),
     title: "",
+    tags: [],
     paper: { ...fixedPaper },
     pages: [firstPage],
     selectedPageId: firstPage.id,
@@ -651,12 +660,47 @@ function normalizeNote(note) {
   return normalizeAutoPages({
     id: note.id,
     title: typeof note.title === "string" ? note.title : "",
+    tags: normalizeTags(note.tags),
     paper: { ...fixedPaper },
     pages,
     selectedPageId,
     createdAt: typeof note.createdAt === "string" ? note.createdAt : new Date().toISOString(),
     updatedAt: typeof note.updatedAt === "string" ? note.updatedAt : new Date().toISOString()
   }, selectedPageId);
+}
+
+function normalizeTags(value) {
+  const rawTags = Array.isArray(value)
+    ? value
+    : typeof value === "string"
+      ? value.split(/[,\n、]/)
+      : [];
+  const tags = [];
+  const seen = new Set();
+
+  for (const rawTag of rawTags) {
+    const tag = normalizeTag(rawTag);
+    const key = tag.toLocaleLowerCase();
+    if (!tag || seen.has(key)) {
+      continue;
+    }
+
+    seen.add(key);
+    tags.push(tag);
+    if (tags.length >= maxTagsPerNote) {
+      break;
+    }
+  }
+
+  return tags;
+}
+
+function normalizeTag(value) {
+  return String(value ?? "")
+    .replace(/^#+/, "")
+    .replace(/\s+/g, " ")
+    .trim()
+    .slice(0, maxTagLength);
 }
 
 function normalizePages(note) {
@@ -940,9 +984,22 @@ function renderPageStack(note) {
 
 function renderList() {
   const query = elements.searchInput.value.trim().toLocaleLowerCase();
+  const allTags = getAllTags(notes);
+  if (activeTagFilter && !allTags.some((tag) => tagsMatch(tag, activeTagFilter))) {
+    activeTagFilter = null;
+  }
+
+  renderTagFilters(allTags);
+
   const filtered = sortNotes(notes).filter((note) => {
     const title = (note.title.trim() || "無題").toLocaleLowerCase();
-    return title.includes(query);
+    const tags = Array.isArray(note.tags) ? note.tags : [];
+    const matchesQuery = !query
+      || title.includes(query)
+      || tags.some((tag) => tag.toLocaleLowerCase().includes(query));
+    const matchesTag = !activeTagFilter || tags.some((tag) => tagsMatch(tag, activeTagFilter));
+
+    return matchesQuery && matchesTag;
   });
 
   elements.noteList.replaceChildren();
@@ -957,12 +1014,17 @@ function renderList() {
 
   for (const note of filtered) {
     const item = document.createElement("div");
-    item.className = note.id === selectedId ? "note-item active" : "note-item";
+    item.className = "note-item";
     item.setAttribute("role", "listitem");
+    const noteTags = Array.isArray(note.tags) ? note.tags : [];
+    const noteTitle = note.title.trim() || "無題";
+
+    const main = document.createElement("div");
+    main.className = "note-main";
 
     const title = document.createElement("div");
     title.className = "note-title";
-    title.textContent = note.title.trim() || "無題";
+    title.textContent = noteTitle;
 
     const meta = document.createElement("div");
     meta.className = "note-meta";
@@ -975,36 +1037,273 @@ function renderList() {
     pages.className = "note-pages";
     pages.textContent = `${note.pages.length}ページ`;
 
+    meta.append(date, pages);
+    if (noteTags.length > 0) {
+      const tags = document.createElement("div");
+      tags.className = "note-tags";
+      tags.textContent = noteTags.map((tag) => `#${tag}`).join(" ");
+      meta.append(tags);
+    }
+
     const openButton = document.createElement("button");
     openButton.type = "button";
     openButton.className = "note-open";
-    openButton.setAttribute("aria-current", note.id === selectedId ? "true" : "false");
-    openButton.setAttribute("aria-label", `${title.textContent}，${date.textContent}`);
-    meta.append(date, pages);
+    openButton.setAttribute("aria-label", `${noteTitle}を開く，${date.textContent}`);
     openButton.append(title, meta);
     openButton.addEventListener("click", () => {
-      selectedId = note.id;
-      currentView = "editor";
-      currentStroke = null;
-      clearHistory();
-      persistNow();
-      render();
-      focusSelectedPage();
+      openNote(note.id);
     });
+    main.append(openButton);
 
     const deleteButton = document.createElement("button");
     deleteButton.type = "button";
     deleteButton.className = "icon-button danger note-delete";
     deleteButton.title = "ノート削除";
-    deleteButton.setAttribute("aria-label", `${title.textContent}を削除`);
+    deleteButton.setAttribute("aria-label", `${noteTitle}を削除`);
     setButtonIcon(deleteButton, "trash");
     deleteButton.addEventListener("click", () => {
       deleteNote(note.id);
     });
 
-    item.append(openButton, deleteButton);
+    const titleEditor = createNoteTitleEditor(note, noteTitle);
+    const tagEditor = createNoteTagEditor(note, noteTitle);
+    item.append(main, titleEditor.button, tagEditor.button, deleteButton, titleEditor.input, tagEditor.input);
     elements.noteList.append(item);
   }
+}
+
+function openNote(noteId) {
+  selectedId = noteId;
+  currentView = "editor";
+  currentStroke = null;
+  clearHistory();
+  persistNow();
+  render();
+  focusSelectedPage();
+}
+
+function createNoteTitleEditor(note, noteTitle) {
+  const initialTitle = note.title ?? "";
+  const displayTitle = initialTitle.trim() || "無題";
+  const button = document.createElement("button");
+  button.type = "button";
+  button.className = "icon-button note-title-edit-button";
+  button.title = "名前編集";
+  button.setAttribute("aria-label", `${noteTitle}の名前を編集`);
+  button.setAttribute("aria-expanded", "false");
+  setButtonIcon(button, "pen");
+
+  const input = document.createElement("input");
+  input.className = "note-title-input";
+  input.type = "text";
+  input.value = initialTitle;
+  input.placeholder = "無題";
+  input.autocomplete = "off";
+  input.spellcheck = false;
+  input.setAttribute("aria-label", `${displayTitle}の名前`);
+  input.hidden = true;
+  button.addEventListener("pointerdown", (event) => {
+    if (!input.hidden) {
+      event.preventDefault();
+    }
+  });
+  button.addEventListener("click", () => {
+    if (!input.hidden) {
+      input.blur();
+      return;
+    }
+
+    input.hidden = false;
+    button.setAttribute("aria-expanded", "true");
+    requestAnimationFrame(() => {
+      input.focus({ preventScroll: true });
+      input.select();
+    });
+  });
+  input.addEventListener("blur", () => {
+    updateNoteTitle(note.id, input.value, { renderListAfter: true });
+    input.hidden = true;
+    button.setAttribute("aria-expanded", "false");
+  });
+  input.addEventListener("keydown", (event) => {
+    if (event.key === "Enter") {
+      event.preventDefault();
+      input.blur();
+    } else if (event.key === "Escape") {
+      event.preventDefault();
+      input.value = initialTitle;
+      input.hidden = true;
+      button.setAttribute("aria-expanded", "false");
+      button.focus({ preventScroll: true });
+    }
+  });
+
+  return { button, input };
+}
+
+function renderTagFilters(tags) {
+  elements.tagFilterBar.replaceChildren();
+  elements.tagFilterBar.hidden = false;
+
+  const allButton = document.createElement("button");
+  allButton.type = "button";
+  allButton.className = activeTagFilter ? "tag-filter-chip" : "tag-filter-chip active";
+  allButton.textContent = "すべて";
+  allButton.setAttribute("aria-pressed", String(!activeTagFilter));
+  allButton.addEventListener("click", () => {
+    activeTagFilter = null;
+    renderList();
+  });
+  elements.tagFilterBar.append(allButton);
+
+  for (const tag of tags) {
+    const tagButton = document.createElement("button");
+    tagButton.type = "button";
+    tagButton.className = tagsMatch(tag, activeTagFilter) ? "tag-filter-chip active" : "tag-filter-chip";
+    tagButton.textContent = `#${tag}`;
+    tagButton.setAttribute("aria-pressed", String(tagsMatch(tag, activeTagFilter)));
+    tagButton.addEventListener("click", () => {
+      activeTagFilter = tag;
+      renderList();
+    });
+    elements.tagFilterBar.append(tagButton);
+  }
+}
+
+function createNoteTagEditor(note, noteTitle) {
+  const tags = Array.isArray(note.tags) ? note.tags : [];
+
+  const button = document.createElement("button");
+  button.type = "button";
+  button.className = tags.length > 0
+    ? "icon-button note-tag-button has-tags"
+    : "icon-button note-tag-button";
+  button.title = tags.length > 0 ? `タグ: ${tags.join(", ")}` : "タグを追加";
+  button.setAttribute("aria-label", `${noteTitle}のタグを編集`);
+  button.setAttribute("aria-expanded", "false");
+  setButtonIcon(button, "tag");
+
+  const input = document.createElement("input");
+  input.className = "note-tag-input";
+  input.type = "text";
+  input.value = tags.join(", ");
+  input.placeholder = "タグ";
+  input.autocomplete = "off";
+  input.spellcheck = false;
+  input.hidden = true;
+
+  button.addEventListener("pointerdown", (event) => {
+    if (!input.hidden) {
+      event.preventDefault();
+    }
+  });
+  button.addEventListener("click", () => {
+    if (!input.hidden) {
+      input.blur();
+      return;
+    }
+
+    input.hidden = false;
+    button.setAttribute("aria-expanded", "true");
+    requestAnimationFrame(() => {
+      input.focus({ preventScroll: true });
+      input.select();
+    });
+  });
+
+  input.addEventListener("blur", () => {
+    updateNoteTags(note.id, input.value);
+    input.hidden = true;
+    button.setAttribute("aria-expanded", "false");
+  });
+  input.addEventListener("keydown", (event) => {
+    if (event.key === "Enter") {
+      event.preventDefault();
+      input.blur();
+    } else if (event.key === "Escape") {
+      event.preventDefault();
+      input.value = tags.join(", ");
+      input.hidden = true;
+      button.setAttribute("aria-expanded", "false");
+      button.focus({ preventScroll: true });
+    }
+  });
+
+  return { button, input };
+}
+
+function updateNoteTitle(noteId, value, options = {}) {
+  const { renderListAfter = false, syncEditorInput = true } = options;
+  const note = notes.find((item) => item.id === noteId);
+  if (!note) {
+    return false;
+  }
+
+  const title = String(value ?? "");
+  if (note.title === title) {
+    return false;
+  }
+
+  note.title = title;
+  note.updatedAt = new Date().toISOString();
+  persistSoon();
+
+  if (syncEditorInput && selectedId === noteId && document.activeElement !== elements.titleInput) {
+    elements.titleInput.value = title;
+  }
+
+  if (renderListAfter) {
+    renderList();
+  }
+
+  updateSaveState();
+  return true;
+}
+
+function updateNoteTags(noteId, value) {
+  const note = notes.find((item) => item.id === noteId);
+  if (!note) {
+    return;
+  }
+
+  const tags = normalizeTags(value);
+  if (tagsEqual(note.tags, tags)) {
+    return;
+  }
+
+  note.tags = tags;
+  note.updatedAt = new Date().toISOString();
+  notes = sortNotes(notes);
+  persistSoon();
+  renderList();
+  updateSaveState();
+}
+
+function getAllTags(items) {
+  const tags = [];
+  const seen = new Set();
+
+  for (const note of items) {
+    for (const tag of note.tags ?? []) {
+      const key = tag.toLocaleLowerCase();
+      if (seen.has(key)) {
+        continue;
+      }
+
+      seen.add(key);
+      tags.push(tag);
+    }
+  }
+
+  return tags.sort((left, right) => left.localeCompare(right, "ja"));
+}
+
+function tagsEqual(left = [], right = []) {
+  return left.length === right.length && left.every((tag, index) => tag === right[index]);
+}
+
+function tagsMatch(left, right) {
+  return Boolean(left && right && left.toLocaleLowerCase() === right.toLocaleLowerCase());
 }
 
 function updateToolButtons() {
